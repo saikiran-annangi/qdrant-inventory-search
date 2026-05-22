@@ -5,6 +5,21 @@ Dense:  sentence-transformers/all-mpnet-base-v2 (768d cosine)
 Sparse: Qdrant/bm25 via FastEmbed (two independent BM25 fields)
 
 Both models are singletons -- loaded once and reused across calls.
+
+PyTorch 2.8 notes
+-----------------
+Two issues surfaced with torch==2.8 + transformers>=4.50:
+
+1. SentenceTransformer.__init__ calls self.to(device) after loading the
+   underlying AutoModel, but transformers may leave some tensors on the
+   meta device.  PyTorch 2.8 forbids copying meta tensors with .to(),
+   so we bypass SentenceTransformer entirely and use AutoModel directly.
+
+2. Streamlit's execution context can activate torch._dynamo / fake-tensor
+   dispatch, routing operations through meta-tensor shape checks even
+   during normal eager inference.  Setting TORCHDYNAMO_DISABLE=1 and
+   calling torch._dynamo.config.disable = True before any model load
+   prevents this.
 """
 
 import os
@@ -12,6 +27,10 @@ import warnings
 
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Disable torch.compile / dynamo BEFORE any torch import so that
+# Streamlit's execution environment cannot activate fake-tensor dispatch.
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 
 from qdrant_client.models import SparseVector
 
@@ -21,22 +40,48 @@ _dense_model = None
 _bm25_model = None
 
 
+def _disable_dynamo() -> None:
+    """Best-effort: turn off torch._dynamo via every available API."""
+    try:
+        import torch._dynamo as _dyn
+        _dyn.config.disable = True
+        _dyn.reset()
+    except Exception:
+        pass
+
+
+def _mpnet_forward(model, enc: dict):
+    """
+    Isolated forward function decorated with torch.compiler.disable.
+
+    Keeps the model call outside torch.compile / dynamo tracing so that
+    PyTorch 2.8's fake-tensor dispatch cannot intercept it.
+    """
+    return model(**enc)
+
+
+# Apply torch.compiler.disable as a decorator at definition time.
+# Falls back gracefully if the API is unavailable (older torch).
+try:
+    import torch as _torch
+    _mpnet_forward = _torch.compiler.disable(_mpnet_forward)
+except Exception:
+    pass
+
+
 class _MpnetEncoder:
     """
-    Lightweight mean-pool + L2-normalize wrapper around AutoModel.
+    Thin mean-pool + L2-normalise wrapper around AutoModel.
 
-    SentenceTransformer.__init__ calls self.to(device) after loading the
-    underlying transformer.  On PyTorch >= 2.8 this raises
-    ``NotImplementedError: Cannot copy out of meta tensor`` because the
-    transformers library initialises some tensors on the ``meta`` device
-    and PyTorch 2.8 no longer allows moving them with .to().
-
-    Bypass: load via AutoModel directly with low_cpu_mem_usage=False so
-    weights land on CPU immediately, then do the same mean-pool + cosine
-    normalisation that all-mpnet-base-v2 uses.
+    Uses AutoModel.from_pretrained directly (low_cpu_mem_usage=False so
+    weights land on CPU immediately) and performs the same mean-pool +
+    cosine-normalise encoding as all-mpnet-base-v2.  Wraps inference in
+    torch.compiler.disable to prevent fake-tensor dispatch on PyTorch 2.8.
     """
 
     def __init__(self, model_name: str) -> None:
+        _disable_dynamo()
+
         import torch
         from transformers import AutoTokenizer, AutoModel
 
@@ -51,7 +96,7 @@ class _MpnetEncoder:
         normalize_embeddings: bool = True,
         show_progress_bar: bool = False,
     ):
-        """Return a numpy array (768,) for the given sentence."""
+        """Return a numpy (768,) embedding for the given sentence."""
         import torch.nn.functional as F
 
         enc = self.tokenizer(
@@ -61,13 +106,13 @@ class _MpnetEncoder:
             max_length=512,
             return_tensors="pt",
         )
-        with self._torch.no_grad():
-            out = self.model(**enc)
 
-        # Mean pooling masked by attention
-        tok = out.last_hidden_state                          # (1, seq, 768)
-        mask = enc["attention_mask"].unsqueeze(-1).float()   # (1, seq, 1)
-        vec = (tok * mask).sum(1) / mask.sum(1).clamp(min=1e-9)  # (1, 768)
+        with self._torch.no_grad():
+            out = _mpnet_forward(self.model, enc)
+
+        tok  = out.last_hidden_state                          # (1, seq, 768)
+        mask = enc["attention_mask"].unsqueeze(-1).float()    # (1, seq, 1)
+        vec  = (tok * mask).sum(1) / mask.sum(1).clamp(min=1e-9)  # (1, 768)
 
         if normalize_embeddings:
             vec = F.normalize(vec, p=2, dim=1)
@@ -104,7 +149,7 @@ def encode_query(query: str) -> tuple:
     from data.normalizers import model_number_variants, normalize_specs
 
     dense_model = get_dense_model()
-    bm25_model = get_bm25_model()
+    bm25_model  = get_bm25_model()
 
     # Dense embedding
     dense_vec = dense_model.encode(
