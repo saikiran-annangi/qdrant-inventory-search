@@ -408,35 +408,36 @@ with st.expander("Evals", expanded=False):
 
     st.markdown("**Overall**")
     st.dataframe([
-        {"Metric": "MRR@10",      "Score": 0.6345},
-        {"Metric": "Precision@1", "Score": 0.5000},
-        {"Metric": "Recall@5",    "Score": 0.7667},
+        {"Metric": "MRR@10",      "Score": 0.6563},
+        {"Metric": "Precision@1", "Score": 0.5556},
+        {"Metric": "Precision@5", "Score": 0.1689},
+        {"Metric": "Recall@5",    "Score": 0.7778},
         {"Metric": "Recall@10",   "Score": 0.8333},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By domain**")
     st.dataframe([
-        {"Domain": "Electrical", "MRR@10": 0.6270, "P@1": 0.5000, "R@5": 0.7667, "R@10": 0.8333, "N": 30},
-        {"Domain": "Mechanical", "MRR@10": 0.6542, "P@1": 0.5333, "R@5": 0.7667, "R@10": 0.8000, "N": 30},
-        {"Domain": "Plumbing",   "MRR@10": 0.6222, "P@1": 0.4667, "R@5": 0.7667, "R@10": 0.8667, "N": 30},
+        {"Domain": "Electrical", "MRR@10": 0.6775, "P@1": 0.6000, "P@5": 0.2000, "R@5": 0.8000, "R@10": 0.8333, "N": 30},
+        {"Domain": "Mechanical", "MRR@10": 0.6819, "P@1": 0.6000, "P@5": 0.1533, "R@5": 0.7667, "R@10": 0.8000, "N": 30},
+        {"Domain": "Plumbing",   "MRR@10": 0.6094, "P@1": 0.4667, "P@5": 0.1533, "R@5": 0.7667, "R@10": 0.8667, "N": 30},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By query type**")
     st.dataframe([
-        {"Query type": "Model number", "MRR@10": 0.7167, "P@1": 0.4333, "R@5": 1.0000, "R@10": 1.0000, "N": 30},
-        {"Query type": "Technical",    "MRR@10": 0.6506, "P@1": 0.5667, "R@5": 0.7333, "R@10": 0.8000, "N": 30},
-        {"Query type": "Descriptive",  "MRR@10": 0.5361, "P@1": 0.5000, "R@5": 0.5667, "R@10": 0.7000, "N": 30},
+        {"Query type": "Model number", "MRR@10": 0.7889, "P@1": 0.6000, "P@5": 0.2200, "R@5": 1.0000, "R@10": 1.0000, "N": 30},
+        {"Query type": "Technical",    "MRR@10": 0.6444, "P@1": 0.5667, "P@5": 0.1600, "R@5": 0.7333, "R@10": 0.8000, "N": 30},
+        {"Query type": "Descriptive",  "MRR@10": 0.5356, "P@1": 0.5000, "P@5": 0.1267, "R@5": 0.6000, "R@10": 0.7000, "N": 30},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By domain x query type**")
     st.dataframe([
-        {"Domain": "Electrical", "Query type": "Model number", "MRR@10": 0.7000, "P@1": 0.4000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
-        {"Domain": "Electrical", "Query type": "Technical",    "MRR@10": 0.6393, "P@1": 0.6000, "R@5": 0.7000, "R@10": 0.8000, "N": 10},
-        {"Domain": "Electrical", "Query type": "Descriptive",  "MRR@10": 0.5417, "P@1": 0.5000, "R@5": 0.6000, "R@10": 0.7000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Model number", "MRR@10": 0.7000, "P@1": 0.4000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Technical",    "MRR@10": 0.5625, "P@1": 0.5000, "R@5": 0.6000, "R@10": 0.7000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Descriptive",  "MRR@10": 0.7000, "P@1": 0.7000, "R@5": 0.7000, "R@10": 0.7000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Model number", "MRR@10": 0.7500, "P@1": 0.5000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Technical",    "MRR@10": 0.7500, "P@1": 0.6000, "R@5": 0.9000, "R@10": 0.9000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Descriptive",  "MRR@10": 0.3667, "P@1": 0.3000, "R@5": 0.4000, "R@10": 0.7000, "N": 10},
+        {"Domain": "Electrical", "Query type": "Model number", "MRR@10": 0.8500, "P@1": 0.7000, "P@5": 0.2600, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
+        {"Domain": "Electrical", "Query type": "Technical",    "MRR@10": 0.6375, "P@1": 0.6000, "P@5": 0.1800, "R@5": 0.7000, "R@10": 0.8000, "N": 10},
+        {"Domain": "Electrical", "Query type": "Descriptive",  "MRR@10": 0.5450, "P@1": 0.5000, "P@5": 0.1600, "R@5": 0.7000, "R@10": 0.7000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Model number", "MRR@10": 0.8000, "P@1": 0.6000, "P@5": 0.2000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Technical",    "MRR@10": 0.5458, "P@1": 0.5000, "P@5": 0.1200, "R@5": 0.6000, "R@10": 0.7000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Descriptive",  "MRR@10": 0.7000, "P@1": 0.7000, "P@5": 0.1400, "R@5": 0.7000, "R@10": 0.7000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Model number", "MRR@10": 0.7167, "P@1": 0.5000, "P@5": 0.2000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Technical",    "MRR@10": 0.7500, "P@1": 0.6000, "P@5": 0.1800, "R@5": 0.9000, "R@10": 0.9000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Descriptive",  "MRR@10": 0.3617, "P@1": 0.3000, "P@5": 0.0800, "R@5": 0.4000, "R@10": 0.7000, "N": 10},
     ], hide_index=True, use_container_width=True)

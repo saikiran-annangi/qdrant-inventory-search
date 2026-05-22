@@ -4,18 +4,21 @@ A hybrid vector search system for industrial inventory (electrical, mechanical, 
 
 **Current eval results (90-query benchmark, reranker off, auto classifier):**
 
-| Metric    | Overall | Electrical | Mechanical | Plumbing |
-|-----------|---------|------------|------------|----------|
-| MRR@10    | 0.655   | 0.660      | 0.649      | 0.656    |
-| Recall@10 | 0.833   | 0.833      | 0.800      | 0.867    |
+| Metric       | Overall | Electrical | Mechanical | Plumbing |
+|--------------|---------|------------|------------|----------|
+| MRR@10       | 0.656   | 0.678      | 0.682      | 0.609    |
+| Precision@1  | 0.556   | 0.600      | 0.600      | 0.467    |
+| Precision@5  | 0.169   | 0.200      | 0.153      | 0.153    |
+| Recall@5     | 0.778   | 0.800      | 0.767      | 0.767    |
+| Recall@10    | 0.833   | 0.833      | 0.800      | 0.867    |
 
 By query type:
 
-| Query type   | MRR@10 | Recall@10 |
-|--------------|--------|-----------|
-| Model number | 0.783  | 1.000     |
-| Technical    | 0.645  | 0.800     |
-| Descriptive  | 0.536  | 0.700     |
+| Query type   | MRR@10 | P@1   | P@5   | Recall@5 | Recall@10 |
+|--------------|--------|-------|-------|----------|-----------|
+| Model number | 0.789  | 0.600 | 0.220 | 1.000    | 1.000     |
+| Technical    | 0.644  | 0.567 | 0.160 | 0.733    | 0.800     |
+| Descriptive  | 0.536  | 0.500 | 0.127 | 0.600    | 0.700     |
 
 ---
 
