@@ -59,26 +59,29 @@ def search(
     dense_vec, sparse_model_vec, sparse_desc_vec = encode_query(query)
     qdrant_filter = build_filter(**(filter_kwargs or {}))
 
-    prefetch = [
-        Prefetch(
+    # Skip any channel whose prefetch limit is 0 -- allows per-query-type
+    # disabling of channels (e.g. sparse_desc=0 for model_number queries).
+    prefetch = []
+    if limits["dense"] > 0:
+        prefetch.append(Prefetch(
             query=dense_vec,
             using="dense",
             limit=limits["dense"],
             filter=qdrant_filter,
-        ),
-        Prefetch(
-            query=sparse_model_vec,
-            using="sparse_model",
-            limit=limits["sparse_model"],
-            filter=qdrant_filter,
-        ),
-        Prefetch(
+        ))
+    prefetch.append(Prefetch(
+        query=sparse_model_vec,
+        using="sparse_model",
+        limit=limits["sparse_model"],
+        filter=qdrant_filter,
+    ))
+    if limits["sparse_desc"] > 0:
+        prefetch.append(Prefetch(
             query=sparse_desc_vec,
             using="sparse_desc",
             limit=limits["sparse_desc"],
             filter=qdrant_filter,
-        ),
-    ]
+        ))
 
     fetch_limit = rerank_top_k if use_reranker else limit
     results = client.query_points(

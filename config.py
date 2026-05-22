@@ -49,7 +49,11 @@ CLASSIFIER_PATH = os.path.join(REPO_ROOT, "query_classifier.joblib")
 # ---------------------------------------------------------------------------
 
 PREFETCH_LIMITS = {
-    "model_number": {"dense": 80, "sparse_model": 80, "sparse_desc": 20},
+    # For model_number queries, sparse_model (BM25) is the primary signal.
+    # Dense is kept small to help with tokenization variants but not override
+    # BM25 specificity. sparse_desc is excluded -- similar products in the same
+    # family share descriptions and would push incorrect siblings to rank 1.
+    "model_number": {"dense": 10, "sparse_model": 80, "sparse_desc": 0},
     "technical":    {"dense": 50, "sparse_model": 50, "sparse_desc": 40},
     "descriptive":  {"dense": 20, "sparse_model": 50, "sparse_desc": 80},
 }

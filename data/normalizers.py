@@ -104,6 +104,8 @@ def model_number_variants(model: str) -> str:
         m.lower(),
         m.replace("/", " "),
         m.replace("/", "-"),
+        m.replace("+", ""),       # ABH120-4042EV  -- full model as one BM25 token
+        m.replace("+", "-"),      # ABH120-4042E-V -- hyphen-safe variant
         re.sub(r"[^a-zA-Z0-9]", "", m),
         re.sub(r"[^a-zA-Z0-9]", "", m).lower(),
     }

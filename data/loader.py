@@ -390,6 +390,11 @@ def _load_standard_schema(
         rollup    = _rollup(locations)
         desc      = str(row.get("Description", "")).strip() if pd.notna(row.get("Description")) else ""
         model     = str(row["Model Number"]).strip()
+        # When model_number is empty and the source uses a dedicated id column
+        # (e.g. Standard Supply uses Product ERP Code), the ERP code IS the
+        # model number buyers search for -- use it as a fallback.
+        if not model and id_col:
+            model = iid
         mfr       = normalize_manufacturer(row.get("Manufacturer Name", ""))
         cat       = str(row.get("Product Category", "")).strip() if pd.notna(row.get("Product Category")) else ""
         uom       = str(row.get("UOM", "EA")).strip() if pd.notna(row.get("UOM")) else "EA"
