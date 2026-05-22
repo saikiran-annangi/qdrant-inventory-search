@@ -117,30 +117,35 @@ def search_with_observability(
 
     t0 = time.perf_counter()
 
-    # Run the three retrievers individually to collect per-retriever attribution
-    dense_pts = client.query_points(
-        COLLECTION_NAME, query=dense_vec, using="dense",
-        limit=limits["dense"], with_payload=False, query_filter=qdrant_filter,
-    ).points
+    # Run active retrievers individually for per-retriever attribution.
+    # Channels with limit=0 are skipped (e.g. sparse_desc=0 for model_number queries).
+    dense_pts, sm_pts, sd_pts = [], [], []
+    if limits["dense"] > 0:
+        dense_pts = client.query_points(
+            COLLECTION_NAME, query=dense_vec, using="dense",
+            limit=limits["dense"], with_payload=False, query_filter=qdrant_filter,
+        ).points
     sm_pts = client.query_points(
         COLLECTION_NAME, query=sm_vec, using="sparse_model",
         limit=limits["sparse_model"], with_payload=False, query_filter=qdrant_filter,
     ).points
-    sd_pts = client.query_points(
-        COLLECTION_NAME, query=sd_vec, using="sparse_desc",
-        limit=limits["sparse_desc"], with_payload=False, query_filter=qdrant_filter,
-    ).points
+    if limits["sparse_desc"] > 0:
+        sd_pts = client.query_points(
+            COLLECTION_NAME, query=sd_vec, using="sparse_desc",
+            limit=limits["sparse_desc"], with_payload=False, query_filter=qdrant_filter,
+        ).points
 
     dense_map = {str(p.id): round(float(p.score), 4) for p in dense_pts}
     sm_map    = {str(p.id): round(float(p.score), 4) for p in sm_pts}
     sd_map    = {str(p.id): round(float(p.score), 4) for p in sd_pts}
 
-    # RRF fusion over the same prefetch limits
-    prefetch = [
-        Prefetch(query=dense_vec, using="dense",        limit=limits["dense"],        filter=qdrant_filter),
-        Prefetch(query=sm_vec,    using="sparse_model", limit=limits["sparse_model"], filter=qdrant_filter),
-        Prefetch(query=sd_vec,    using="sparse_desc",  limit=limits["sparse_desc"],  filter=qdrant_filter),
-    ]
+    # RRF fusion -- skip channels whose limit is 0
+    prefetch = []
+    if limits["dense"] > 0:
+        prefetch.append(Prefetch(query=dense_vec, using="dense",        limit=limits["dense"],        filter=qdrant_filter))
+    prefetch.append(    Prefetch(query=sm_vec,    using="sparse_model", limit=limits["sparse_model"], filter=qdrant_filter))
+    if limits["sparse_desc"] > 0:
+        prefetch.append(Prefetch(query=sd_vec,    using="sparse_desc",  limit=limits["sparse_desc"],  filter=qdrant_filter))
     rrf_resp = client.query_points(
         collection_name=COLLECTION_NAME,
         prefetch=prefetch,
@@ -352,24 +357,37 @@ for r in results:
 
 st.divider()
 with st.expander("Evals", expanded=False):
-    st.caption("90 queries | reranker on | Gemini 2.5 Flash classifier | hybrid dense + BM25 + RRF")
+    st.caption("90 queries across electrical, mechanical, and plumbing | reranker off | auto classifier | hybrid dense + BM25 + RRF")
 
     st.markdown("**Overall**")
     st.dataframe([
-        {"Metric": "MRR@10",    "Score": 0.6964},
-        {"Metric": "Recall@10", "Score": 0.8000},
+        {"Metric": "MRR@10",    "Score": 0.6548},
+        {"Metric": "Recall@10", "Score": 0.8333},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By domain**")
     st.dataframe([
-        {"Domain": "Electrical", "MRR@10": 0.7644, "Recall@10": 0.8667, "N": 30},
-        {"Domain": "Plumbing",   "MRR@10": 0.7347, "Recall@10": 0.8667, "N": 30},
-        {"Domain": "Mechanical", "MRR@10": 0.5900, "Recall@10": 0.6667, "N": 30},
+        {"Domain": "Electrical", "MRR@10": 0.6603, "Recall@10": 0.8333, "N": 30},
+        {"Domain": "Mechanical", "MRR@10": 0.6486, "Recall@10": 0.8000, "N": 30},
+        {"Domain": "Plumbing",   "MRR@10": 0.6556, "Recall@10": 0.8667, "N": 30},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By query type**")
     st.dataframe([
-        {"Query type": "Model number", "MRR@10": 0.8000, "Recall@10": 0.8000, "N": 30},
-        {"Query type": "Technical",    "MRR@10": 0.7067, "Recall@10": 0.8000, "N": 30},
-        {"Query type": "Descriptive",  "MRR@10": 0.5825, "Recall@10": 0.8000, "N": 30},
+        {"Query type": "Model number", "MRR@10": 0.7833, "Recall@10": 1.0000, "N": 30},
+        {"Query type": "Technical",    "MRR@10": 0.6450, "Recall@10": 0.8000, "N": 30},
+        {"Query type": "Descriptive",  "MRR@10": 0.5361, "Recall@10": 0.7000, "N": 30},
     ], hide_index=True, use_container_width=False)
+
+    st.markdown("**By domain x query type**")
+    st.dataframe([
+        {"Domain": "Electrical", "Query type": "Model number", "MRR@10": 0.8000, "Recall@10": 1.0000, "N": 10},
+        {"Domain": "Electrical", "Query type": "Technical",    "MRR@10": 0.6393, "Recall@10": 0.8000, "N": 10},
+        {"Domain": "Electrical", "Query type": "Descriptive",  "MRR@10": 0.5417, "Recall@10": 0.7000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Model number", "MRR@10": 0.7000, "Recall@10": 1.0000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Technical",    "MRR@10": 0.5458, "Recall@10": 0.7000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Descriptive",  "MRR@10": 0.7000, "Recall@10": 0.7000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Model number", "MRR@10": 0.8500, "Recall@10": 1.0000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Technical",    "MRR@10": 0.7500, "Recall@10": 0.9000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Descriptive",  "MRR@10": 0.3667, "Recall@10": 0.7000, "N": 10},
+    ], hide_index=True, use_container_width=True)

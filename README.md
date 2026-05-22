@@ -2,12 +2,20 @@
 
 A hybrid vector search system for industrial inventory (electrical, mechanical, plumbing). Combines dense semantic embeddings, two BM25 sparse fields, and cross-encoder re-ranking to handle model number lookups, technical spec queries, and natural-language descriptions in a single pipeline.
 
-**Current eval results (90-query benchmark, reranker on):**
+**Current eval results (90-query benchmark, reranker off, auto classifier):**
 
 | Metric    | Overall | Electrical | Mechanical | Plumbing |
 |-----------|---------|------------|------------|----------|
-| MRR@10    | 0.696   | 0.764      | 0.590      | 0.735    |
-| Recall@10 | 0.800   | 0.867      | 0.667      | 0.867    |
+| MRR@10    | 0.655   | 0.660      | 0.649      | 0.656    |
+| Recall@10 | 0.833   | 0.833      | 0.800      | 0.867    |
+
+By query type:
+
+| Query type   | MRR@10 | Recall@10 |
+|--------------|--------|-----------|
+| Model number | 0.783  | 1.000     |
+| Technical    | 0.645  | 0.800     |
+| Descriptive  | 0.536  | 0.700     |
 
 ---
 
@@ -61,11 +69,11 @@ Final ranked results
 
 | Query type   | Dense | Sparse model | Sparse desc |
 |--------------|-------|--------------|-------------|
-| model_number | 80    | 80           | 20          |
+| model_number | 10    | 80           | 0           |
 | technical    | 50    | 50           | 40          |
 | descriptive  | 20    | 50           | 80          |
 
-Model-number queries lean heavily on BM25 over the model-number field. Descriptive queries lean on BM25 over the description field. The dense retriever contributes across all types.
+Model-number queries rely almost entirely on BM25 over the model-number field. Dense is kept small to assist with non-standard tokenization but is not allowed to override the BM25 specificity. Sparse desc is disabled for model-number queries -- products in the same family share nearly identical descriptions, which causes the wrong sibling to surface at rank 1 via description similarity. Descriptive queries flip this: BM25 over spec-expanded descriptions dominates, with dense providing semantic fallback.
 
 ### Embedding models
 
@@ -79,7 +87,7 @@ Model-number queries lean heavily on BM25 over the model-number field. Descripti
 ### Collection schema (Qdrant)
 
 - **dense**: 768d cosine, HNSW m=16 ef_construct=200, int8 scalar quantization
-- **sparse_model**: BM25 over model number variants (original + lowercase + slash variants + alphanum-only)
+- **sparse_model**: BM25 over model number variants (original, lowercase, slash-to-space, slash-to-hyphen, plus-stripped, plus-to-hyphen, alphanum-only)
 - **sparse_desc**: BM25 over spec-normalized description + manufacturer + category
 
 Payload indexes on: `source`, `manufacturer_name`, `product_category`, `currency`, `model_number` (text), `has_stock`, `total_qoh`, `min_cost`, `max_cost`, and nested `locations[].in_stock`, `locations[].qoh`, `locations[].location_erp_id`.
