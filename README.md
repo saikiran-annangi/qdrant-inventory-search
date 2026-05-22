@@ -2,23 +2,31 @@
 
 A hybrid vector search system for industrial inventory (electrical, mechanical, plumbing). Combines dense semantic embeddings, two BM25 sparse fields, and cross-encoder re-ranking to handle model number lookups, technical spec queries, and natural-language descriptions in a single pipeline.
 
-**Current eval results (90-query benchmark, reranker off, auto classifier):**
+**Current eval results (90-query benchmark, auto classifier):**
 
-| Metric       | Overall | Electrical | Mechanical | Plumbing |
-|--------------|---------|------------|------------|----------|
-| MRR@10       | 0.656   | 0.678      | 0.682      | 0.609    |
-| Precision@1  | 0.556   | 0.600      | 0.600      | 0.467    |
-| Precision@5  | 0.169   | 0.200      | 0.153      | 0.153    |
-| Recall@5     | 0.778   | 0.800      | 0.767      | 0.767    |
-| Recall@10    | 0.833   | 0.833      | 0.800      | 0.867    |
+| Metric       | Reranker ON | Reranker OFF |
+|--------------|-------------|--------------|
+| MRR@10       | **0.763**   | 0.656        |
+| Precision@1  | **0.700**   | 0.556        |
+| Precision@5  | **0.180**   | 0.169        |
+| Recall@5     | **0.833**   | 0.778        |
+| Recall@10    | **0.867**   | 0.833        |
 
-By query type:
+By domain (reranker ON):
+
+| Domain      | MRR@10 | P@1   | P@5   | Recall@5 | Recall@10 |
+|-------------|--------|-------|-------|----------|-----------|
+| Electrical  | 0.764  | 0.700 | 0.207 | 0.833    | 0.867     |
+| Mechanical  | 0.790  | 0.733 | 0.173 | 0.867    | 0.867     |
+| Plumbing    | 0.735  | 0.667 | 0.160 | 0.800    | 0.867     |
+
+By query type (reranker ON):
 
 | Query type   | MRR@10 | P@1   | P@5   | Recall@5 | Recall@10 |
 |--------------|--------|-------|-------|----------|-----------|
-| Model number | 0.789  | 0.600 | 0.220 | 1.000    | 1.000     |
-| Technical    | 0.644  | 0.567 | 0.160 | 0.733    | 0.800     |
-| Descriptive  | 0.536  | 0.500 | 0.127 | 0.600    | 0.700     |
+| Model number | 0.983  | 0.967 | 0.220 | 1.000    | 1.000     |
+| Technical    | 0.707  | 0.633 | 0.173 | 0.800    | 0.800     |
+| Descriptive  | 0.599  | 0.500 | 0.147 | 0.700    | 0.800     |
 
 ---
 
