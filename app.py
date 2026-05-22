@@ -176,24 +176,41 @@ def search_with_observability(
     for rank, hit in enumerate(hits, 1):
         p   = hit.payload
         hid = str(hit.id)
+
+        # Per-result retriever attribution: which channels surfaced this doc
+        d_score  = dense_map.get(hid)
+        sm_score = sm_map.get(hid)
+        sd_score = sd_map.get(hid)
+
+        # Human-readable source label
+        sources = []
+        if d_score  is not None: sources.append("Dense")
+        if sm_score is not None: sources.append("BM25-model")
+        if sd_score is not None: sources.append("BM25-desc")
+        retrieval_path = " + ".join(sources) if sources else "unknown"
+
         results.append({
-            "rank":              rank,
-            "id":                hid,
-            "reranker_score":    round(float(hit.score), 4),
-            "rrf_score":         rrf_scores.get(hid, 0.0),
-            "model_number":      p.get("model_number")    or "",
-            "description":       p.get("description")     or "",
-            "manufacturer_name": p.get("manufacturer_name") or "",
-            "product_category":  p.get("product_category")  or "",
-            "source":            p.get("source")          or "",
-            "internal_id":       p.get("internal_id")     or "",
-            "has_stock":         p.get("has_stock"),
-            "total_qoh":         p.get("total_qoh"),
-            "min_cost":          p.get("min_cost"),
-            "max_cost":          p.get("max_cost"),
-            "currency":          p.get("currency")        or "",
-            "locations":         p.get("locations")       or [],
-            "raw_payload":       dict(p),
+            "rank":                rank,
+            "id":                  hid,
+            "reranker_score":      round(float(hit.score), 4),
+            "rrf_score":           rrf_scores.get(hid, 0.0),
+            "dense_score":         round(d_score,  4) if d_score  is not None else None,
+            "sparse_model_score":  round(sm_score, 4) if sm_score is not None else None,
+            "sparse_desc_score":   round(sd_score, 4) if sd_score is not None else None,
+            "retrieval_path":      retrieval_path,
+            "model_number":        p.get("model_number")      or "",
+            "description":         p.get("description")       or "",
+            "manufacturer_name":   p.get("manufacturer_name") or "",
+            "product_category":    p.get("product_category")  or "",
+            "source":              p.get("source")            or "",
+            "internal_id":         p.get("internal_id")       or "",
+            "has_stock":           p.get("has_stock"),
+            "total_qoh":           p.get("total_qoh"),
+            "min_cost":            p.get("min_cost"),
+            "max_cost":            p.get("max_cost"),
+            "currency":            p.get("currency")          or "",
+            "locations":           p.get("locations")         or [],
+            "raw_payload":         dict(p),
         })
 
     return results, query_type, timings, retriever_counts
@@ -323,6 +340,36 @@ for r in results:
                     unsafe_allow_html=True,
                 )
 
+        # Retrieval path observability
+        st.markdown("**Retrieval path**")
+        rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+        rc1.metric(
+            "Dense",
+            f"{r['dense_score']:.3f}" if r["dense_score"] is not None else "—",
+            help="Cosine similarity score from the all-mpnet dense retriever. '—' means this doc was not in the dense candidate pool.",
+        )
+        rc2.metric(
+            "BM25 model",
+            f"{r['sparse_model_score']:.3f}" if r["sparse_model_score"] is not None else "—",
+            help="BM25 score from the sparse model-number retriever. '—' means this doc was not in the BM25-model candidate pool.",
+        )
+        rc3.metric(
+            "BM25 desc",
+            f"{r['sparse_desc_score']:.3f}" if r["sparse_desc_score"] is not None else "—",
+            help="BM25 score from the sparse description retriever. '—' means this doc was not in the BM25-desc candidate pool (or desc channel is disabled for this query type).",
+        )
+        rc4.metric(
+            "RRF fusion",
+            f"{r['rrf_score']:.4f}",
+            help="Reciprocal Rank Fusion score after merging all active retriever pools.",
+        )
+        rc5.metric(
+            "Reranker",
+            f"{r['reranker_score']:.4f}",
+            help="Cross-encoder reranker score. Higher means the reranker considered this a better match for the query.",
+        )
+        st.caption(f"Retrieved by: **{r['retrieval_path']}**")
+
         if r["locations"]:
             st.markdown("**Branch inventory**")
             loc_rows = []
@@ -361,33 +408,35 @@ with st.expander("Evals", expanded=False):
 
     st.markdown("**Overall**")
     st.dataframe([
-        {"Metric": "MRR@10",    "Score": 0.6548},
-        {"Metric": "Recall@10", "Score": 0.8333},
+        {"Metric": "MRR@10",      "Score": 0.6345},
+        {"Metric": "Precision@1", "Score": 0.5000},
+        {"Metric": "Recall@5",    "Score": 0.7667},
+        {"Metric": "Recall@10",   "Score": 0.8333},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By domain**")
     st.dataframe([
-        {"Domain": "Electrical", "MRR@10": 0.6603, "Recall@10": 0.8333, "N": 30},
-        {"Domain": "Mechanical", "MRR@10": 0.6486, "Recall@10": 0.8000, "N": 30},
-        {"Domain": "Plumbing",   "MRR@10": 0.6556, "Recall@10": 0.8667, "N": 30},
+        {"Domain": "Electrical", "MRR@10": 0.6270, "P@1": 0.5000, "R@5": 0.7667, "R@10": 0.8333, "N": 30},
+        {"Domain": "Mechanical", "MRR@10": 0.6542, "P@1": 0.5333, "R@5": 0.7667, "R@10": 0.8000, "N": 30},
+        {"Domain": "Plumbing",   "MRR@10": 0.6222, "P@1": 0.4667, "R@5": 0.7667, "R@10": 0.8667, "N": 30},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By query type**")
     st.dataframe([
-        {"Query type": "Model number", "MRR@10": 0.7833, "Recall@10": 1.0000, "N": 30},
-        {"Query type": "Technical",    "MRR@10": 0.6450, "Recall@10": 0.8000, "N": 30},
-        {"Query type": "Descriptive",  "MRR@10": 0.5361, "Recall@10": 0.7000, "N": 30},
+        {"Query type": "Model number", "MRR@10": 0.7167, "P@1": 0.4333, "R@5": 1.0000, "R@10": 1.0000, "N": 30},
+        {"Query type": "Technical",    "MRR@10": 0.6506, "P@1": 0.5667, "R@5": 0.7333, "R@10": 0.8000, "N": 30},
+        {"Query type": "Descriptive",  "MRR@10": 0.5361, "P@1": 0.5000, "R@5": 0.5667, "R@10": 0.7000, "N": 30},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By domain x query type**")
     st.dataframe([
-        {"Domain": "Electrical", "Query type": "Model number", "MRR@10": 0.8000, "Recall@10": 1.0000, "N": 10},
-        {"Domain": "Electrical", "Query type": "Technical",    "MRR@10": 0.6393, "Recall@10": 0.8000, "N": 10},
-        {"Domain": "Electrical", "Query type": "Descriptive",  "MRR@10": 0.5417, "Recall@10": 0.7000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Model number", "MRR@10": 0.7000, "Recall@10": 1.0000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Technical",    "MRR@10": 0.5458, "Recall@10": 0.7000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Descriptive",  "MRR@10": 0.7000, "Recall@10": 0.7000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Model number", "MRR@10": 0.8500, "Recall@10": 1.0000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Technical",    "MRR@10": 0.7500, "Recall@10": 0.9000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Descriptive",  "MRR@10": 0.3667, "Recall@10": 0.7000, "N": 10},
+        {"Domain": "Electrical", "Query type": "Model number", "MRR@10": 0.7000, "P@1": 0.4000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
+        {"Domain": "Electrical", "Query type": "Technical",    "MRR@10": 0.6393, "P@1": 0.6000, "R@5": 0.7000, "R@10": 0.8000, "N": 10},
+        {"Domain": "Electrical", "Query type": "Descriptive",  "MRR@10": 0.5417, "P@1": 0.5000, "R@5": 0.6000, "R@10": 0.7000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Model number", "MRR@10": 0.7000, "P@1": 0.4000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Technical",    "MRR@10": 0.5625, "P@1": 0.5000, "R@5": 0.6000, "R@10": 0.7000, "N": 10},
+        {"Domain": "Mechanical", "Query type": "Descriptive",  "MRR@10": 0.7000, "P@1": 0.7000, "R@5": 0.7000, "R@10": 0.7000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Model number", "MRR@10": 0.7500, "P@1": 0.5000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Technical",    "MRR@10": 0.7500, "P@1": 0.6000, "R@5": 0.9000, "R@10": 0.9000, "N": 10},
+        {"Domain": "Plumbing",   "Query type": "Descriptive",  "MRR@10": 0.3667, "P@1": 0.3000, "R@5": 0.4000, "R@10": 0.7000, "N": 10},
     ], hide_index=True, use_container_width=True)

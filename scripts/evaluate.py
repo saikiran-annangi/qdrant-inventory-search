@@ -78,6 +78,13 @@ def recall_at_k(results: list, query: dict, k: int = 10) -> float:
     return 0.0
 
 
+def precision_at_1(results: list, query: dict) -> float:
+    """1.0 if the top result is a hit, else 0.0."""
+    if not results:
+        return 0.0
+    return 1.0 if is_hit(results[0], query) else 0.0
+
+
 # ---------------------------------------------------------------------------
 # Main evaluation loop
 # ---------------------------------------------------------------------------
@@ -122,11 +129,13 @@ def run_evaluation(
             rerank_top_k=50 if use_reranker else 10,
         )
 
-        rr  = reciprocal_rank(hits, q)
-        rec = recall_at_k(hits, q, k=10)
+        rr   = reciprocal_rank(hits, q)
+        rec5 = recall_at_k(hits, q, k=5)
+        rec  = recall_at_k(hits, q, k=10)
+        p1   = precision_at_1(hits, q)
 
         key = (domain, gt_type)
-        acc.setdefault(key, []).append((rr, rec))
+        acc.setdefault(key, []).append((rr, rec5, rec, p1))
 
         top1 = hits[0] if hits else {}
         detail_rows.append({
@@ -137,7 +146,9 @@ def run_evaluation(
             "correct_type":  qtype == gt_type,
             "query":         query_str,
             "rr":            round(rr, 4),
-            "recall":        round(rec, 4),
+            "precision_at_1": round(p1, 4),
+            "recall_at_5":   round(rec5, 4),
+            "recall_at_10":  round(rec, 4),
             "hit":           rr > 0,
             "top1_model":    top1.get("model_number", ""),
             "top1_desc":     str(top1.get("description", ""))[:60],
@@ -154,47 +165,56 @@ def run_evaluation(
             cls_marker = "" if qtype == gt_type else f" [mis->{qtype}]"
             print(
                 f"  {marker} [{domain:11s}|{gt_type:13s}]{cls_marker:15s} "
-                f"{query_str[:52]:52s}  RR={rr:.3f}  R@10={rec:.1f}"
+                f"{query_str[:52]:52s}  P@1={p1:.0f}  R@5={rec5:.1f}  R@10={rec:.1f}"
             )
 
-    # Aggregation helper
+    # Aggregation helper -- tuple layout: (rr, rec5, rec10, p1)
     def avg(pairs, idx):
         return round(sum(x[idx] for x in pairs) / len(pairs), 4) if pairs else 0.0
+
+    def agg(pairs):
+        return {
+            "MRR@10":      avg(pairs, 0),
+            "Recall@5":    avg(pairs, 1),
+            "Recall@10":   avg(pairs, 2),
+            "Precision@1": avg(pairs, 3),
+            "n":           len(pairs),
+        }
 
     summary: dict = {}
 
     all_pairs = [p for v in acc.values() for p in v]
-    summary["overall"] = {"MRR@10": avg(all_pairs, 0), "Recall@10": avg(all_pairs, 1), "n": len(all_pairs)}
+    summary["overall"] = agg(all_pairs)
 
     for domain in ("electrical", "mechanical", "plumbing"):
         domain_pairs = [p for (d, _), v in acc.items() if d == domain for p in v]
-        summary[domain] = {"MRR@10": avg(domain_pairs, 0), "Recall@10": avg(domain_pairs, 1), "n": len(domain_pairs)}
+        summary[domain] = agg(domain_pairs)
 
     for qtype in ("model_number", "technical", "descriptive"):
         type_pairs = [p for (_, t), v in acc.items() if t == qtype for p in v]
-        summary[qtype] = {"MRR@10": avg(type_pairs, 0), "Recall@10": avg(type_pairs, 1), "n": len(type_pairs)}
+        summary[qtype] = agg(type_pairs)
 
     for (domain, qtype), pairs in sorted(acc.items()):
-        summary[f"{domain}/{qtype}"] = {"MRR@10": avg(pairs, 0), "Recall@10": avg(pairs, 1), "n": len(pairs)}
+        summary[f"{domain}/{qtype}"] = agg(pairs)
 
     total_q     = len(detail_rows)
     correct_cls = sum(1 for r in detail_rows if r["correct_type"])
     summary["classifier_accuracy"] = round(correct_cls / total_q, 4)
 
     if verbose:
-        print("\n" + "=" * 72)
-        print(f"{'BREAKDOWN':<30} {'MRR@10':>8} {'Recall@10':>10} {'N':>5}")
-        print("-" * 72)
+        print("\n" + "=" * 88)
+        print(f"{'BREAKDOWN':<30} {'MRR@10':>8} {'P@1':>7} {'R@5':>7} {'R@10':>7} {'N':>5}")
+        print("-" * 88)
         for label in ["overall", "electrical", "mechanical", "plumbing",
                       "model_number", "technical", "descriptive"]:
             v = summary[label]
-            print(f"  {label:<28} {v['MRR@10']:>8.4f} {v['Recall@10']:>10.4f} {v['n']:>5}")
-        print("-" * 72)
+            print(f"  {label:<28} {v['MRR@10']:>8.4f} {v['Precision@1']:>7.4f} {v['Recall@5']:>7.4f} {v['Recall@10']:>7.4f} {v['n']:>5}")
+        print("-" * 88)
         print(f"  {'domain x type':28}")
         for label in sorted(k for k in summary if "/" in k):
             v = summary[label]
-            print(f"    {label:<26} {v['MRR@10']:>8.4f} {v['Recall@10']:>10.4f} {v['n']:>5}")
-        print("=" * 72)
+            print(f"    {label:<26} {v['MRR@10']:>8.4f} {v['Precision@1']:>7.4f} {v['Recall@5']:>7.4f} {v['Recall@10']:>7.4f} {v['n']:>5}")
+        print("=" * 88)
         print(f"  Query classifier accuracy: {summary['classifier_accuracy']:.1%}  ({correct_cls}/{total_q} correct)")
 
         misclassed = [r for r in detail_rows if not r["correct_type"]]
