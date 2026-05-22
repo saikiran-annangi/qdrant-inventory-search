@@ -22,11 +22,21 @@ _bm25_model = None
 
 
 def get_dense_model():
-    """Return the dense SentenceTransformer model, loading it on first call."""
+    """Return the dense SentenceTransformer model, loading it on first call.
+
+    model_kwargs={"low_cpu_mem_usage": False} prevents transformers from
+    initializing weights on the 'meta' device, which causes a
+    NotImplementedError when SentenceTransformer subsequently calls
+    self.to("cpu") on PyTorch >= 2.8.
+    """
     global _dense_model
     if _dense_model is None:
         from sentence_transformers import SentenceTransformer
-        _dense_model = SentenceTransformer(DENSE_MODEL_NAME, device="cpu")
+        _dense_model = SentenceTransformer(
+            DENSE_MODEL_NAME,
+            device="cpu",
+            model_kwargs={"low_cpu_mem_usage": False},
+        )
     return _dense_model
 
 
