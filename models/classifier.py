@@ -1,28 +1,22 @@
 """
-Three-tier query classifier: model_number / technical / descriptive.
+Query classifier: model_number / technical / descriptive.
 
-Priority order:
-  1. Trained logistic regression (query_classifier.joblib) -- fast, local, ~85-90% accuracy
-  2. OpenRouter Gemini 2.5 Flash (OPENROUTER_API_KEY env var) -- highest accuracy, ~99%
-  3. Regex fallback (always available, no dependencies) -- ~55% accuracy
+Uses Gemini 2.5 Flash via OpenRouter exclusively.
+Set OPENROUTER_API_KEY in the environment (or .env file).
 
-Results are cached in-process so repeated calls are free.
+Results are cached in-process so repeated calls for the same query are free.
 """
 
 import os
-import re
 import warnings
 
 warnings.filterwarnings("ignore")
 
-from config import CLASSIFIER_PATH
-
-_lr_classifier = None
 _openrouter_client = None
 _classify_cache: dict = {}
 
 # ---------------------------------------------------------------------------
-# Prompt used for the OpenRouter LLM classifier
+# Prompt
 # ---------------------------------------------------------------------------
 
 CLASSIFY_PROMPT = """\
@@ -52,40 +46,8 @@ Query: "{query}"
 Reply with exactly one word (model_number / technical / descriptive):"""
 
 # ---------------------------------------------------------------------------
-# Regex patterns (tier 3 fallback)
+# OpenRouter client
 # ---------------------------------------------------------------------------
-
-_MODEL_NUMBER_RE = re.compile(
-    r"^[A-Z0-9]{2,}[-./][A-Z0-9]|"   # alphanum + separator
-    r"^[A-Z]{1,4}[0-9]{3,}|"          # letter prefix + 3+ digits
-    r"^[0-9]{4,}[A-Z]",               # digit-heavy with trailing letter
-    re.IGNORECASE,
-)
-
-_TECH_KEYWORDS = re.compile(
-    r"\b(\d+\.?\d*\s*(A|KA|V|W|MA|HP|KW|POLE|P|AMP|VOLT|OHM))\b|"
-    r"\b(MCB|RCD|GFCI|MCCB|VFD|UPS|DOL|Y[-/]D|NPN|PNP)\b|"
-    r"\b(SINGLE|DOUBLE|TRIPLE|3[-\s]?PHASE|1[-\s]?PHASE)\b|"
-    r"\b(DIN|IP\d{2}|NEMA|CSA|UL|IEC|AS/NZS)\b",
-    re.IGNORECASE,
-)
-
-# ---------------------------------------------------------------------------
-# Singleton loaders
-# ---------------------------------------------------------------------------
-
-
-def _get_lr_classifier():
-    """Load the trained logistic regression classifier from disk if available."""
-    global _lr_classifier
-    if _lr_classifier is None:
-        if os.path.exists(CLASSIFIER_PATH):
-            try:
-                import joblib
-                _lr_classifier = joblib.load(CLASSIFIER_PATH)
-            except Exception:
-                pass
-    return _lr_classifier
 
 
 def _get_openrouter_client():
@@ -94,78 +56,48 @@ def _get_openrouter_client():
     if _openrouter_client is None:
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            return None
-        try:
-            from openai import OpenAI
-            _openrouter_client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=api_key,
+            raise EnvironmentError(
+                "OPENROUTER_API_KEY is not set. "
+                "Add it to your .env file to enable the Gemini classifier."
             )
-        except Exception:
-            return None
+        from openai import OpenAI
+        _openrouter_client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
     return _openrouter_client
 
 
 # ---------------------------------------------------------------------------
-# Classification functions
+# Public API
 # ---------------------------------------------------------------------------
-
-
-def classify_query_regex(query: str) -> str:
-    """Regex-based fallback classifier (~55% accuracy on the eval set)."""
-    q = query.strip()
-    if " " not in q and _MODEL_NUMBER_RE.search(q):
-        return "model_number"
-    words = q.split()
-    if len(words) <= 3 and _MODEL_NUMBER_RE.search(q):
-        return "model_number"
-    if _TECH_KEYWORDS.search(q):
-        return "technical"
-    return "descriptive"
 
 
 def classify_query(query: str) -> str:
     """
-    Classify a query as 'model_number', 'technical', or 'descriptive'.
+    Classify a query as 'model_number', 'technical', or 'descriptive'
+    using Gemini 2.5 Flash via OpenRouter.
 
-    Tries each tier in order and returns the first successful result.
-    Caches results in-process to avoid redundant API calls.
+    Results are cached in-process to avoid redundant API calls.
     """
     q = query.strip()
 
     if q in _classify_cache:
         return _classify_cache[q]
 
-    result = None
+    client = _get_openrouter_client()
+    resp = client.chat.completions.create(
+        model="google/gemini-2.5-flash",
+        messages=[{"role": "user", "content": CLASSIFY_PROMPT.format(query=q)}],
+        max_tokens=8,
+        temperature=0,
+    )
+    token = resp.choices[0].message.content.strip().lower().split()[0]
 
-    # Tier 1: trained LR model (fastest, no network required)
-    lr = _get_lr_classifier()
-    if lr is not None:
-        try:
-            result = lr.predict([q])[0]
-        except Exception:
-            result = None
+    if token not in ("model_number", "technical", "descriptive"):
+        raise ValueError(
+            f"Gemini returned unexpected classification '{token}' for query: {q!r}"
+        )
 
-    # Tier 2: OpenRouter Gemini 2.5 Flash (most accurate, requires API key)
-    if result is None:
-        client = _get_openrouter_client()
-        if client is not None:
-            try:
-                resp = client.chat.completions.create(
-                    model="google/gemini-2.5-flash",
-                    messages=[{"role": "user", "content": CLASSIFY_PROMPT.format(query=q)}],
-                    max_tokens=8,
-                    temperature=0,
-                )
-                token = resp.choices[0].message.content.strip().lower().split()[0]
-                if token in ("model_number", "technical", "descriptive"):
-                    result = token
-            except Exception:
-                result = None
-
-    # Tier 3: regex fallback (always available)
-    if result is None:
-        result = classify_query_regex(q)
-
-    _classify_cache[q] = result
-    return result
+    _classify_cache[q] = token
+    return token
