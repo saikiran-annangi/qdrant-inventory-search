@@ -21,22 +21,65 @@ _dense_model = None
 _bm25_model = None
 
 
-def get_dense_model():
-    """Return the dense SentenceTransformer model, loading it on first call.
-
-    model_kwargs={"low_cpu_mem_usage": False} prevents transformers from
-    initializing weights on the 'meta' device, which causes a
-    NotImplementedError when SentenceTransformer subsequently calls
-    self.to("cpu") on PyTorch >= 2.8.
+class _MpnetEncoder:
     """
+    Lightweight mean-pool + L2-normalize wrapper around AutoModel.
+
+    SentenceTransformer.__init__ calls self.to(device) after loading the
+    underlying transformer.  On PyTorch >= 2.8 this raises
+    ``NotImplementedError: Cannot copy out of meta tensor`` because the
+    transformers library initialises some tensors on the ``meta`` device
+    and PyTorch 2.8 no longer allows moving them with .to().
+
+    Bypass: load via AutoModel directly with low_cpu_mem_usage=False so
+    weights land on CPU immediately, then do the same mean-pool + cosine
+    normalisation that all-mpnet-base-v2 uses.
+    """
+
+    def __init__(self, model_name: str) -> None:
+        import torch
+        from transformers import AutoTokenizer, AutoModel
+
+        self._torch = torch
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModel.from_pretrained(model_name, low_cpu_mem_usage=False)
+        self.model.eval()
+
+    def encode(
+        self,
+        sentence: str,
+        normalize_embeddings: bool = True,
+        show_progress_bar: bool = False,
+    ):
+        """Return a numpy array (768,) for the given sentence."""
+        import torch.nn.functional as F
+
+        enc = self.tokenizer(
+            sentence,
+            padding=True,
+            truncation=True,
+            max_length=512,
+            return_tensors="pt",
+        )
+        with self._torch.no_grad():
+            out = self.model(**enc)
+
+        # Mean pooling masked by attention
+        tok = out.last_hidden_state                          # (1, seq, 768)
+        mask = enc["attention_mask"].unsqueeze(-1).float()   # (1, seq, 1)
+        vec = (tok * mask).sum(1) / mask.sum(1).clamp(min=1e-9)  # (1, 768)
+
+        if normalize_embeddings:
+            vec = F.normalize(vec, p=2, dim=1)
+
+        return vec[0].cpu().numpy()
+
+
+def get_dense_model():
+    """Return the dense encoder, loading it on first call."""
     global _dense_model
     if _dense_model is None:
-        from sentence_transformers import SentenceTransformer
-        _dense_model = SentenceTransformer(
-            DENSE_MODEL_NAME,
-            device="cpu",
-            model_kwargs={"low_cpu_mem_usage": False},
-        )
+        _dense_model = _MpnetEncoder(DENSE_MODEL_NAME)
     return _dense_model
 
 
