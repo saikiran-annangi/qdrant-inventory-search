@@ -33,6 +33,19 @@ def rerank(query: str, hits: list) -> list:
     into a single document string for each candidate, then scores
     (query, document) pairs and returns hits sorted by score descending.
     """
+    sorted_hits, _ = rerank_with_scores(query, hits)
+    return sorted_hits
+
+
+def rerank_with_scores(query: str, hits: list) -> tuple:
+    """
+    Re-rank hits and return both the sorted hits and a scores dict.
+
+    Returns:
+        sorted_hits   -- list of ScoredPoint, highest CrossEncoder score first
+        scores_by_id  -- dict mapping str(hit.id) -> float CrossEncoder logit
+                         Range is typically [-5, +10]; higher = more relevant.
+    """
     reranker = get_reranker()
 
     pairs = []
@@ -46,5 +59,6 @@ def rerank(query: str, hits: list) -> list:
         pairs.append((query, doc_text))
 
     scores = reranker.predict(pairs)
+    scores_by_id = {str(hit.id): float(s) for hit, s in zip(hits, scores)}
     ranked = sorted(zip(scores, hits), key=lambda x: x[0], reverse=True)
-    return [h for _, h in ranked]
+    return [h for _, h in ranked], scores_by_id

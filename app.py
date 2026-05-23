@@ -1,15 +1,12 @@
 """
 Inventory Search -- Streamlit UI
 
-Single search box with distributor filter and full pipeline observability.
-
 Run:
     streamlit run app.py
 """
 
 import os
 import sys
-import time
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -19,14 +16,11 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
-from qdrant_client.models import Prefetch, FusionQuery, Fusion
 
-from config import PREFETCH_LIMITS, COLLECTION_NAME
-from core.client import get_client
-from core.filters import build_filter
-from models.classifier import classify_query, CLASSIFY_PROMPT
-from models.embeddings import get_dense_model, get_bm25_model, encode_query
-from models.reranker import get_reranker, rerank
+from models.classifier import CLASSIFY_PROMPT
+from models.embeddings import get_dense_model, get_bm25_model
+from models.reranker import get_reranker
+from core.search import search_with_observability
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -82,141 +76,6 @@ def load_models():
 
 
 # ---------------------------------------------------------------------------
-# Search with full pipeline observability
-# ---------------------------------------------------------------------------
-
-def search_with_observability(
-    query: str,
-    limit: int = 5,
-    rerank_top_k: int = 50,
-    source_filter: str = None,
-) -> tuple:
-    """
-    Run the full search pipeline and return results with timing and
-    per-retriever attribution.
-
-    Returns:
-        results          -- list of result dicts
-        query_type       -- classified query type string
-        timings          -- dict of step timing in milliseconds
-        retriever_counts -- dict with candidate counts per retriever
-    """
-    client = get_client()
-    timings = {}
-
-    t0 = time.perf_counter()
-    query_type = classify_query(query)
-    timings["classify_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-
-    t0 = time.perf_counter()
-    dense_vec, sm_vec, sd_vec = encode_query(query)
-    timings["encode_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-
-    limits = PREFETCH_LIMITS[query_type]
-    qdrant_filter = build_filter(source=source_filter) if source_filter else None
-
-    t0 = time.perf_counter()
-
-    # Run active retrievers individually for per-retriever attribution.
-    # Channels with limit=0 are skipped (e.g. sparse_desc=0 for model_number queries).
-    dense_pts, sm_pts, sd_pts = [], [], []
-    if limits["dense"] > 0:
-        dense_pts = client.query_points(
-            COLLECTION_NAME, query=dense_vec, using="dense",
-            limit=limits["dense"], with_payload=False, query_filter=qdrant_filter,
-        ).points
-    sm_pts = client.query_points(
-        COLLECTION_NAME, query=sm_vec, using="sparse_model",
-        limit=limits["sparse_model"], with_payload=False, query_filter=qdrant_filter,
-    ).points
-    if limits["sparse_desc"] > 0:
-        sd_pts = client.query_points(
-            COLLECTION_NAME, query=sd_vec, using="sparse_desc",
-            limit=limits["sparse_desc"], with_payload=False, query_filter=qdrant_filter,
-        ).points
-
-    dense_map = {str(p.id): round(float(p.score), 4) for p in dense_pts}
-    sm_map    = {str(p.id): round(float(p.score), 4) for p in sm_pts}
-    sd_map    = {str(p.id): round(float(p.score), 4) for p in sd_pts}
-
-    # RRF fusion -- skip channels whose limit is 0
-    prefetch = []
-    if limits["dense"] > 0:
-        prefetch.append(Prefetch(query=dense_vec, using="dense",        limit=limits["dense"],        filter=qdrant_filter))
-    prefetch.append(    Prefetch(query=sm_vec,    using="sparse_model", limit=limits["sparse_model"], filter=qdrant_filter))
-    if limits["sparse_desc"] > 0:
-        prefetch.append(Prefetch(query=sd_vec,    using="sparse_desc",  limit=limits["sparse_desc"],  filter=qdrant_filter))
-    rrf_resp = client.query_points(
-        collection_name=COLLECTION_NAME,
-        prefetch=prefetch,
-        query=FusionQuery(fusion=Fusion.RRF),
-        limit=rerank_top_k,
-        with_payload=True,
-    )
-    hits = rrf_resp.points
-    rrf_scores = {str(h.id): round(float(h.score), 6) for h in hits}
-    timings["retrieve_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-
-    rrf_pool_ids = {str(h.id) for h in hits}
-    retriever_counts = {
-        "dense":         sum(1 for i in rrf_pool_ids if i in dense_map),
-        "sparse_model":  sum(1 for i in rrf_pool_ids if i in sm_map),
-        "sparse_desc":   sum(1 for i in rrf_pool_ids if i in sd_map),
-        "rrf_pool_size": len(hits),
-    }
-
-    t0 = time.perf_counter()
-    if hits:
-        hits = rerank(query, hits)
-        hits = hits[:limit]
-    timings["rerank_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-    timings["total_ms"]  = round(sum(timings.values()), 1)
-
-    results = []
-    for rank, hit in enumerate(hits, 1):
-        p   = hit.payload
-        hid = str(hit.id)
-
-        # Per-result retriever attribution: which channels surfaced this doc
-        d_score  = dense_map.get(hid)
-        sm_score = sm_map.get(hid)
-        sd_score = sd_map.get(hid)
-
-        # Human-readable source label
-        sources = []
-        if d_score  is not None: sources.append("Dense")
-        if sm_score is not None: sources.append("BM25-model")
-        if sd_score is not None: sources.append("BM25-desc")
-        retrieval_path = " + ".join(sources) if sources else "unknown"
-
-        results.append({
-            "rank":                rank,
-            "id":                  hid,
-            "reranker_score":      round(float(hit.score), 4),
-            "rrf_score":           rrf_scores.get(hid, 0.0),
-            "dense_score":         round(d_score,  4) if d_score  is not None else None,
-            "sparse_model_score":  round(sm_score, 4) if sm_score is not None else None,
-            "sparse_desc_score":   round(sd_score, 4) if sd_score is not None else None,
-            "retrieval_path":      retrieval_path,
-            "model_number":        p.get("model_number")      or "",
-            "description":         p.get("description")       or "",
-            "manufacturer_name":   p.get("manufacturer_name") or "",
-            "product_category":    p.get("product_category")  or "",
-            "source":              p.get("source")            or "",
-            "internal_id":         p.get("internal_id")       or "",
-            "has_stock":           p.get("has_stock"),
-            "total_qoh":           p.get("total_qoh"),
-            "min_cost":            p.get("min_cost"),
-            "max_cost":            p.get("max_cost"),
-            "currency":            p.get("currency")          or "",
-            "locations":           p.get("locations")         or [],
-            "raw_payload":         dict(p),
-        })
-
-    return results, query_type, timings, retriever_counts
-
-
-# ---------------------------------------------------------------------------
 # UI helpers
 # ---------------------------------------------------------------------------
 
@@ -252,7 +111,7 @@ col_input, col_filter, col_btn = st.columns([6, 2, 1])
 with col_input:
     query = st.text_input(
         label="Search",
-        placeholder="Model number, spec, or description -- e.g. 'Schneider 16A single pole MCB'  or  'K-2084'",
+        placeholder="Model number, spec, or description — e.g. 'Schneider 16A single pole MCB'  or  'K-2084'",
         label_visibility="collapsed",
     )
 with col_filter:
@@ -284,8 +143,8 @@ st.divider()
 st.markdown("**Pipeline**")
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Query type",  query_type.replace("_", " ").title())
-c2.metric("Classify",    f"{timings['classify_ms']} ms")
+c1.metric("Query type", query_type.replace("_", " ").title())
+c2.metric("Classify",   f"{timings['classify_ms']} ms")
 with c2:
     with st.popover("View prompt", use_container_width=False):
         st.code(CLASSIFY_PROMPT.format(query=query.strip()), language=None)
@@ -296,7 +155,7 @@ c6.metric("Total",    f"{timings['total_ms']} ms")
 
 pool = ret_counts["rrf_pool_size"]
 st.markdown(
-    f"**Retriever contribution** -- candidates each retriever passed into the "
+    f"**Retriever contribution** — candidates each retriever passed into the "
     f"{pool}-candidate RRF pool (can overlap)"
 )
 rc1, rc2, rc3 = st.columns(3)
@@ -336,7 +195,7 @@ for r in results:
                 curr = r["currency"]
                 st.markdown(
                     f'<span class="meta">Cost: {curr} {r["min_cost"]:.2f} '
-                    f'- {r["max_cost"]:.2f}</span>',
+                    f'— {r["max_cost"]:.2f}</span>',
                     unsafe_allow_html=True,
                 )
 
@@ -346,17 +205,17 @@ for r in results:
         rc1.metric(
             "Dense",
             f"{r['dense_score']:.3f}" if r["dense_score"] is not None else "—",
-            help="Cosine similarity score from the all-mpnet dense retriever. '—' means this doc was not in the dense candidate pool.",
+            help="Cosine similarity from the dense retriever. '—' means this doc was not in the dense candidate pool.",
         )
         rc2.metric(
             "BM25 model",
             f"{r['sparse_model_score']:.3f}" if r["sparse_model_score"] is not None else "—",
-            help="BM25 score from the sparse model-number retriever. '—' means this doc was not in the BM25-model candidate pool.",
+            help="BM25 score from the model-number retriever. '—' means this doc was not in the BM25-model candidate pool.",
         )
         rc3.metric(
             "BM25 desc",
             f"{r['sparse_desc_score']:.3f}" if r["sparse_desc_score"] is not None else "—",
-            help="BM25 score from the sparse description retriever. '—' means this doc was not in the BM25-desc candidate pool (or desc channel is disabled for this query type).",
+            help="BM25 score from the description retriever. '—' means this doc was not in the BM25-desc candidate pool (or desc channel is disabled for this query type).",
         )
         rc4.metric(
             "RRF fusion",
@@ -366,7 +225,7 @@ for r in results:
         rc5.metric(
             "Reranker",
             f"{r['reranker_score']:.4f}",
-            help="Cross-encoder reranker score. Higher means the reranker considered this a better match for the query.",
+            help="Cross-encoder score (ms-marco-MiniLM-L-6-v2). Raw logit — typically [-5, +10], higher = better match.",
         )
         st.caption(f"Retrieved by: **{r['retrieval_path']}**")
 
@@ -404,7 +263,7 @@ for r in results:
 
 st.divider()
 with st.expander("Evals", expanded=False):
-    st.caption("90 queries across electrical, mechanical, and plumbing | auto classifier | hybrid dense + BM25 + RRF")
+    st.caption("90 queries across electrical, mechanical, and plumbing | Gemini classifier | hybrid dense + BM25 + RRF")
 
     st.markdown("**Overall**")
     st.dataframe([
@@ -428,7 +287,7 @@ with st.expander("Evals", expanded=False):
         {"Query type": "Descriptive",  "MRR@10": 0.5992, "P@1": 0.5000, "R@5": 0.7000, "R@10": 0.8000, "N": 30},
     ], hide_index=True, use_container_width=False)
 
-    st.markdown("**By domain x query type**")
+    st.markdown("**By domain × query type**")
     st.dataframe([
         {"Domain": "Electrical", "Query type": "Model number", "MRR@10": 1.0000, "P@1": 1.0000, "R@5": 1.0000, "R@10": 1.0000, "N": 10},
         {"Domain": "Electrical", "Query type": "Technical",    "MRR@10": 0.7000, "P@1": 0.7000, "R@5": 0.7000, "R@10": 0.7000, "N": 10},
