@@ -53,3 +53,9 @@ ENV/
 
 # Logs
 *.log
+
+# Enrichment cache (large file, regenerate with scripts/enrich_descriptions.py)
+enrichment_cache.json
+
+# Personal reference doc
+PROJECT_REFERENCE.md

@@ -21,6 +21,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["GEMINI_API_KEY"] = ""  # disable direct Gemini calls; enrichment_cache.json is used instead
 
 # Add repo root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,8 +58,9 @@ def _embed_sparse(bm25_model, texts: list) -> list:
 
 
 def _dense_text(record: dict) -> str:
+    desc = record.get("extended_description") or record.get("description", "")
     parts = [
-        record.get("description", ""),
+        desc,
         record.get("manufacturer_name", ""),
         record.get("product_category", ""),
         record.get("model_number", ""),
