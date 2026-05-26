@@ -192,7 +192,7 @@
       "Recall@50": 0.9,
       "Miss@50": 0.1
     },
-    "classifier_accuracy": 0.7444
+    "classifier_accuracy": 0.7556
   },
   "details": [
     {
@@ -1441,8 +1441,8 @@
       "id": "mq025",
       "domain": "mechanical",
       "gt_type": "descriptive",
-      "classified_as": "technical",
-      "correct_type": false,
+      "classified_as": "descriptive",
+      "correct_type": true,
       "query": "5 inch roof exhaust vent cap for bathroom fan",
       "mrr_at_3": 0.5,
       "mrr_at_10": 0.5,
