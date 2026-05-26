@@ -4,28 +4,27 @@ Hybrid vector search over industrial inventory (electrical, mechanical, plumbing
 
 ## Eval results — 90 queries (electrical / mechanical / plumbing)
 
-| Metric       | Score  |
-|--------------|--------|
-| MRR@10       | 0.763  |
-| Precision@1  | 0.700  |
-| Recall@5     | 0.833  |
-| Recall@10    | 0.867  |
+| Metric    | Score  |
+|-----------|--------|
+| MRR@3     | 0.748  |
+| Recall@3  | 0.811  |
+| Miss@3    | 0.189  |
 
 **By domain**
 
-| Domain      | MRR@10 | P@1   | R@5   | R@10  |
-|-------------|--------|-------|-------|-------|
-| Electrical  | 0.764  | 0.700 | 0.833 | 0.867 |
-| Mechanical  | 0.790  | 0.733 | 0.867 | 0.867 |
-| Plumbing    | 0.735  | 0.667 | 0.800 | 0.867 |
+| Domain      | MRR@3 | Recall@3 | Miss@3 |
+|-------------|-------|----------|--------|
+| Electrical  | 0.761 | 0.833    | 0.167  |
+| Mechanical  | 0.767 | 0.833    | 0.167  |
+| Plumbing    | 0.717 | 0.767    | 0.233  |
 
 **By query type**
 
-| Query type   | MRR@10 | P@1   | R@5   | R@10  |
-|--------------|--------|-------|-------|-------|
-| Model number | 0.983  | 0.967 | 1.000 | 1.000 |
-| Technical    | 0.707  | 0.633 | 0.800 | 0.800 |
-| Descriptive  | 0.599  | 0.500 | 0.700 | 0.800 |
+| Query type   | MRR@3 | Recall@3 | Miss@3 |
+|--------------|-------|----------|--------|
+| Model number | 0.983 | 1.000    | 0.000  |
+| Technical    | 0.700 | 0.767    | 0.233  |
+| Descriptive  | 0.561 | 0.667    | 0.333  |
 
 ---
 

@@ -106,7 +106,7 @@ def search(
 
 def search_with_observability(
     query: str,
-    limit: int = 5,
+    limit: int = 3,
     rerank_top_k: int = 50,
     source_filter: str = None,
 ) -> tuple:

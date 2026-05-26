@@ -4,11 +4,11 @@ Evaluation against eval_queries.json (90 representative queries).
 30 electrical / 30 mechanical / 30 plumbing.
 10 model_number + 10 technical + 10 descriptive per domain.
 
-The auto classifier is used by default (not the ground-truth type) for honest metrics.
+All metrics are evaluated at k=3.
 
 Usage:
-    python scripts/evaluate.py                # auto classifier, no reranker
-    python scripts/evaluate.py --rerank       # with cross-encoder reranker
+    python scripts/evaluate.py                # auto classifier, with reranker
+    python scripts/evaluate.py --no-rerank    # without cross-encoder reranker
     python scripts/evaluate.py --gt-type      # use ground-truth type (oracle upper bound)
 """
 
@@ -29,6 +29,7 @@ from models.reranker import get_reranker
 from core.search import search
 
 EVAL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eval_queries.json")
+K = 3  # evaluation depth for all metrics
 
 
 # ---------------------------------------------------------------------------
@@ -60,31 +61,37 @@ def is_hit(result: dict, query: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Metrics
+# Metrics (all at k=3)
 # ---------------------------------------------------------------------------
 
 
-def reciprocal_rank(results: list, query: dict) -> float:
-    for i, r in enumerate(results, 1):
+def mrr_at_k(results: list, query: dict, k: int = K) -> float:
+    """Reciprocal rank of the first hit within the top k. 0 if not found."""
+    for i, r in enumerate(results[:k], 1):
         if is_hit(r, query):
             return 1.0 / i
     return 0.0
 
 
-def recall_at_k(results: list, query: dict, k: int = 10) -> float:
+def precision_at_k(results: list, query: dict, k: int = K) -> float:
+    """Fraction of top-k results that are hits."""
+    if not results:
+        return 0.0
+    hits = sum(1 for r in results[:k] if is_hit(r, query))
+    return hits / k
+
+
+def recall_at_k(results: list, query: dict, k: int = K) -> float:
+    """1.0 if the correct answer appears anywhere in the top k, else 0."""
     for r in results[:k]:
         if is_hit(r, query):
             return 1.0
     return 0.0
 
 
-def precision_at_k(results: list, query: dict, k: int = 1) -> float:
-    """Fraction of the top-k results that are hits.
-    For single-answer queries this equals recall_at_k / k."""
-    if not results:
-        return 0.0
-    hits = sum(1 for r in results[:k] if is_hit(r, query))
-    return hits / k
+def miss_at_k(results: list, query: dict, k: int = K) -> float:
+    """1.0 if the correct answer is absent from the top k (complete failure)."""
+    return 1.0 - recall_at_k(results, query, k)
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +100,7 @@ def precision_at_k(results: list, query: dict, k: int = 1) -> float:
 
 
 def run_evaluation(
-    use_reranker: bool = False,
+    use_reranker: bool = True,
     use_auto_classifier: bool = True,
     verbose: bool = True,
 ) -> dict:
@@ -111,7 +118,11 @@ def run_evaluation(
 
     classifier_mode = "auto" if use_auto_classifier else "ground-truth"
     if verbose:
-        print(f"Evaluating {len(queries)} queries  |  reranker={'on' if use_reranker else 'off'}  |  classifier={classifier_mode}\n")
+        print(
+            f"Evaluating {len(queries)} queries  |  "
+            f"reranker={'on' if use_reranker else 'off'}  |  "
+            f"classifier={classifier_mode}  |  k={K}\n"
+        )
 
     acc: dict = {}
     detail_rows = []
@@ -125,20 +136,19 @@ def run_evaluation(
 
         hits = search(
             query_str,
-            limit=10,
+            limit=K,
             query_type=qtype,
             use_reranker=use_reranker,
-            rerank_top_k=50 if use_reranker else 10,
+            rerank_top_k=50 if use_reranker else K,
         )
 
-        rr   = reciprocal_rank(hits, q)
-        p1   = precision_at_k(hits, q, k=1)
-        p5   = precision_at_k(hits, q, k=5)
-        rec5 = recall_at_k(hits, q, k=5)
-        rec  = recall_at_k(hits, q, k=10)
+        rr   = mrr_at_k(hits, q)
+        rec3 = recall_at_k(hits, q)
+        mis3 = miss_at_k(hits, q)
 
+        # tuple layout: (rr, rec3, miss3)
         key = (domain, gt_type)
-        acc.setdefault(key, []).append((rr, p1, p5, rec5, rec))
+        acc.setdefault(key, []).append((rr, rec3, mis3))
 
         top1 = hits[0] if hits else {}
         detail_rows.append({
@@ -148,15 +158,13 @@ def run_evaluation(
             "classified_as": qtype,
             "correct_type":  qtype == gt_type,
             "query":         query_str,
-            "rr":            round(rr, 4),
-            "precision_at_1": round(p1, 4),
-            "precision_at_5": round(p5, 4),
-            "recall_at_5":   round(rec5, 4),
-            "recall_at_10":  round(rec, 4),
-            "hit":           rr > 0,
+            "mrr_at_3":      round(rr,   4),
+            "recall_at_3":   round(rec3, 4),
+            "miss_at_3":     round(mis3, 4),
+            "hit":           rec3 > 0,
             "top1_model":    top1.get("model_number", ""),
             "top1_desc":     str(top1.get("description", ""))[:60],
-            "expected":      (
+            "expected": (
                 q.get("expected_model_number")
                 or q.get("expected_item_id")
                 or q.get("expected_erp_code")
@@ -165,25 +173,24 @@ def run_evaluation(
         })
 
         if verbose:
-            marker     = "+" if rr > 0 else "x"
+            marker     = "+" if rec3 > 0 else "x"
             cls_marker = "" if qtype == gt_type else f" [mis->{qtype}]"
             print(
                 f"  {marker} [{domain:11s}|{gt_type:13s}]{cls_marker:15s} "
-                f"{query_str[:52]:52s}  P@1={p1:.2f}  P@5={p5:.2f}  R@5={rec5:.1f}  R@10={rec:.1f}"
+                f"{query_str[:52]:52s}  "
+                f"MRR@3={rr:.3f}  R@3={rec3:.0f}  Miss@3={mis3:.0f}"
             )
 
-    # Aggregation helper -- tuple layout: (rr, p1, p5, rec5, rec10)
+    # Aggregation
     def avg(pairs, idx):
         return round(sum(x[idx] for x in pairs) / len(pairs), 4) if pairs else 0.0
 
     def agg(pairs):
         return {
-            "MRR@10":      avg(pairs, 0),
-            "Precision@1": avg(pairs, 1),
-            "Precision@5": avg(pairs, 2),
-            "Recall@5":    avg(pairs, 3),
-            "Recall@10":   avg(pairs, 4),
-            "n":           len(pairs),
+            "MRR@3":    avg(pairs, 0),
+            "Recall@3": avg(pairs, 1),
+            "Miss@3":   avg(pairs, 2),
+            "n":        len(pairs),
         }
 
     summary: dict = {}
@@ -207,19 +214,26 @@ def run_evaluation(
     summary["classifier_accuracy"] = round(correct_cls / total_q, 4)
 
     if verbose:
-        print("\n" + "=" * 96)
-        print(f"{'BREAKDOWN':<30} {'MRR@10':>8} {'P@1':>7} {'P@5':>7} {'R@5':>7} {'R@10':>7} {'N':>5}")
-        print("-" * 96)
+        w = 78
+        print("\n" + "=" * w)
+        print(f"{'BREAKDOWN':<30} {'MRR@3':>8} {'R@3':>8} {'Miss@3':>8} {'N':>5}")
+        print("-" * w)
         for label in ["overall", "electrical", "mechanical", "plumbing",
                       "model_number", "technical", "descriptive"]:
             v = summary[label]
-            print(f"  {label:<28} {v['MRR@10']:>8.4f} {v['Precision@1']:>7.4f} {v['Precision@5']:>7.4f} {v['Recall@5']:>7.4f} {v['Recall@10']:>7.4f} {v['n']:>5}")
-        print("-" * 96)
-        print(f"  {'domain x type':28}")
+            print(
+                f"  {label:<28} {v['MRR@3']:>8.4f} "
+                f"{v['Recall@3']:>8.4f} {v['Miss@3']:>8.4f} {v['n']:>5}"
+            )
+        print("-" * w)
+        print(f"  {'domain x type':<28}")
         for label in sorted(k for k in summary if "/" in k):
             v = summary[label]
-            print(f"    {label:<26} {v['MRR@10']:>8.4f} {v['Precision@1']:>7.4f} {v['Precision@5']:>7.4f} {v['Recall@5']:>7.4f} {v['Recall@10']:>7.4f} {v['n']:>5}")
-        print("=" * 96)
+            print(
+                f"    {label:<26} {v['MRR@3']:>8.4f} "
+                f"{v['Recall@3']:>8.4f} {v['Miss@3']:>8.4f} {v['n']:>5}"
+            )
+        print("=" * w)
         print(f"  Query classifier accuracy: {summary['classifier_accuracy']:.1%}  ({correct_cls}/{total_q} correct)")
 
         misclassed = [r for r in detail_rows if not r["correct_type"]]
@@ -232,8 +246,8 @@ def run_evaluation(
 
 
 if __name__ == "__main__":
-    use_reranker = "--rerank"  in sys.argv
-    use_gt_type  = "--gt-type" in sys.argv
+    use_reranker = "--no-rerank" not in sys.argv   # reranker ON by default
+    use_gt_type  = "--gt-type"   in sys.argv
 
     results = run_evaluation(
         use_reranker=use_reranker,
@@ -241,7 +255,7 @@ if __name__ == "__main__":
         verbose=True,
     )
 
-    tag = ("_reranked" if use_reranker else "") + ("_gttype" if use_gt_type else "")
+    tag = ("" if use_reranker else "_no_rerank") + ("_gttype" if use_gt_type else "")
     out = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         f"eval_results{tag}.json",
