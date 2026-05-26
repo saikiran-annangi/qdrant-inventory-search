@@ -35,7 +35,11 @@ from qdrant_client.models import (
 from config import QDRANT_URL, QDRANT_API_KEY, COLLECTION_NAME, DENSE_DIM
 
 REPO_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STORAGE_PATH = os.path.join(REPO_ROOT, "qdrant_storage")
+# Override with QDRANT_LOCAL_STORAGE_PATH env var if the storage lives outside the repo
+STORAGE_PATH = os.getenv(
+    "QDRANT_LOCAL_STORAGE_PATH",
+    os.path.join(REPO_ROOT, "qdrant_storage"),
+)
 BATCH_SIZE   = 500
 
 
