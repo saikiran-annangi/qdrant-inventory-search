@@ -129,6 +129,9 @@ if not query or not query.strip():
 _cache_key = (query.strip(), source_filter)
 if search_clicked or st.session_state.get("_search_key") != _cache_key:
     st.session_state["_search_key"] = _cache_key
+    # Clear the ERP ID lookup so a stale ID from the previous search
+    # is not immediately evaluated against the new query's candidate pool.
+    st.session_state["erp_lookup"] = ""
     with st.spinner("Searching..."):
         _r = search_with_observability(query.strip(), source_filter=source_filter)
     st.session_state["_search_results"]  = _r[0]
@@ -280,7 +283,7 @@ for r in results:
 # ---------------------------------------------------------------------------
 
 st.divider()
-with st.expander("🔍  ERP ID / Model number position lookup", expanded=False):
+with st.expander("ERP ID / Model number position lookup", expanded=False):
     st.caption(
         "Enter an internal ID or model number to check if it appeared in the "
         "top-50 RRF candidate pool and where the reranker placed it."
