@@ -124,18 +124,28 @@ with col_btn:
 if not query or not query.strip():
     st.stop()
 
-# Run only when the button is clicked or the query changes
-if not search_clicked and "last_query" in st.session_state and st.session_state.last_query == query:
+# Re-run the search only when the button is clicked or the query/filter changed.
+# On any other rerun (e.g. ERP ID box, expander toggle) we render from session state.
+_cache_key = (query.strip(), source_filter)
+if search_clicked or st.session_state.get("_search_key") != _cache_key:
+    st.session_state["_search_key"] = _cache_key
+    with st.spinner("Searching..."):
+        _r = search_with_observability(query.strip(), source_filter=source_filter)
+    st.session_state["_search_results"]  = _r[0]
+    st.session_state["_query_type"]      = _r[1]
+    st.session_state["_timings"]         = _r[2]
+    st.session_state["_ret_counts"]      = _r[3]
+    st.session_state["_full_pool"]       = _r[4]
+
+# Always render from session state — safe across any rerun
+if "_search_results" not in st.session_state:
     st.stop()
 
-st.session_state.last_query = query
-
-# Run search
-with st.spinner("Searching..."):
-    results, query_type, timings, ret_counts, full_pool = search_with_observability(
-        query.strip(), source_filter=source_filter
-    )
-st.session_state["full_pool"] = full_pool
+results    = st.session_state["_search_results"]
+query_type = st.session_state["_query_type"]
+timings    = st.session_state["_timings"]
+ret_counts = st.session_state["_ret_counts"]
+full_pool  = st.session_state["_full_pool"]
 
 # ---------------------------------------------------------------------------
 # Pipeline observability
@@ -282,7 +292,7 @@ with st.expander("🔍  ERP ID / Model number position lookup", expanded=False):
         key="erp_lookup",
     )
 
-    pool = st.session_state.get("full_pool", [])
+    pool = st.session_state.get("_full_pool", [])
 
     if lookup_id and lookup_id.strip() and pool:
         needle = lookup_id.strip().lower()
