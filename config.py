@@ -16,7 +16,8 @@ except ImportError:
 # Qdrant
 # ---------------------------------------------------------------------------
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL     = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)   # required for Qdrant Cloud
 COLLECTION_NAME = "inventory"
 DENSE_DIM = 768  # all-mpnet-base-v2 output dimension
 

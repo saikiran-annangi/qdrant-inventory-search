@@ -32,7 +32,7 @@ from qdrant_client.models import (
     HnswConfigDiff,
 )
 
-from config import QDRANT_URL, COLLECTION_NAME, DENSE_DIM
+from config import QDRANT_URL, QDRANT_API_KEY, COLLECTION_NAME, DENSE_DIM
 
 REPO_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STORAGE_PATH = os.path.join(REPO_ROOT, "qdrant_storage")
@@ -44,7 +44,7 @@ def main():
     local = QdrantClient(path=STORAGE_PATH)
 
     print(f"Connecting to Qdrant server at {QDRANT_URL}...")
-    server = QdrantClient(url=QDRANT_URL, check_compatibility=False)
+    server = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, check_compatibility=False)
 
     existing = [c.name for c in server.get_collections().collections]
     if COLLECTION_NAME in existing:
