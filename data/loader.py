@@ -216,7 +216,7 @@ def load_au_parspec() -> list:
             "currency":             "AUD",
             **rollup,
             "locations":            locations,
-            "_bm25_model":          model_number_variants(model),
+            "_bm25_model":          model_number_variants(model) + " " + model_number_variants(iid),
             "_bm25_desc":           normalize_specs(f"{bm25_text} {mfr} {cat}"),
         })
     return records
@@ -234,6 +234,7 @@ def load_burnaby_dc() -> list:
     records = []
     for _, row in df.iterrows():
         iid      = str(row["_internal_id"]).strip()
+        raw_item = str(row["Item"]).strip()   # e.g. "12345" — without the _N suffix
         qoh      = float(row["On Hand"]) if pd.notna(row["On Hand"]) else 0.0
         cost     = float(row["Low Repl Cost"]) if pd.notna(row["Low Repl Cost"]) else None
         desc_raw = str(row["Description"]).strip() if pd.notna(row["Description"]) else ""
@@ -278,7 +279,10 @@ def load_burnaby_dc() -> list:
             "avg_sell_price":       None,
             "currency":             "CAD",
             "locations":            [loc],
-            "_bm25_model":          model_number_variants(model),
+            # Index both the model (last word of description) and the raw item
+            # number so users can search by either form. raw_item is used instead
+            # of iid because iid has a "_N" row-index suffix appended to it.
+            "_bm25_model":          model_number_variants(model) + " " + model_number_variants(raw_item),
             "_bm25_desc":           normalize_specs(f"{bm25_text} {mfr} Lighting"),
         })
     return records
@@ -447,7 +451,10 @@ def _load_standard_schema(
             "currency":             currency,
             **rollup,
             "locations":            locations,
-            "_bm25_model":          model_number_variants(model),
+            # Index both model number and internal_id so users can search by
+            # either form (e.g. ERP code, prefixed model like SCHCQO120PAF).
+            # When iid == model (e.g. standard_supply fallback) this is a no-op duplicate.
+            "_bm25_model":          model_number_variants(model) + " " + model_number_variants(iid),
             "_bm25_desc":           normalize_specs(f"{bm25_text} {mfr} {cat}"),
         })
     return records
