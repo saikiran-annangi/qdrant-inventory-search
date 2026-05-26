@@ -225,8 +225,8 @@ def load_au_parspec() -> list:
 def load_burnaby_dc() -> list:
     """Burnaby DC Lighting -- one product per row (pre-aggregated)."""
     source = "burnaby_dc"
-    path = os.path.join(DATA_DIR, "Burnaby DC Lighting Inventory 9 17.csv")
-    df = pd.read_csv(path, low_memory=False)
+    path = os.path.join(DATA_DIR, "Burnaby DC Lighting Inventory 9 17.xlsx")
+    df = pd.read_excel(path)
     df.columns = [c.strip() for c in df.columns]
     df = df.reset_index(drop=True)
     df["_internal_id"] = df["Item"].astype(str).str.strip() + "_" + df.index.astype(str)
@@ -291,8 +291,8 @@ def load_burnaby_dc() -> list:
 def load_guillevin_1() -> list:
     """Guillevin 1 -- multiple rows per item (one row per location)."""
     source = "guillevin_1"
-    path = os.path.join(DATA_DIR, "Guillevin_inventory_data_1.csv")
-    df = pd.read_csv(path, low_memory=False)
+    path = os.path.join(DATA_DIR, "Guillevin_inventory_data_1.xlsx")
+    df = pd.read_excel(path)
 
     loc_groups = _build_locations_from_rows(
         df, "Item Id",
@@ -461,7 +461,8 @@ def _load_standard_schema(
 
 
 def load_guillevin_2() -> list:
-    path = os.path.join(DATA_DIR, "Guillevin_inventory_data_2.csv")
+    # Use the UTF-8 converted file; the original has latin-1 encoded characters.
+    path = os.path.join(DATA_DIR, "Guillevin_inventory_data_2_utf8.csv")
     # The file contains 1M+ placeholder rows after the real data.
     # require_description=True drops all rows where Description is null.
     return _load_standard_schema(
@@ -475,8 +476,8 @@ def load_guillevin_2() -> list:
 def load_inventory_sample() -> list:
     """INVENTORY SAMPLE -- Mersen fuses, no location data."""
     source = "inventory_sample"
-    path = os.path.join(DATA_DIR, "INVENTORY SAMPLE.csv")
-    df = pd.read_csv(path, low_memory=False)
+    path = os.path.join(DATA_DIR, "INVENTORY SAMPLE.xlsx")
+    df = pd.read_excel(path)
     df.columns = ["manufacturer_name", "model_number", "description", "extended_description"]
 
     records = []
