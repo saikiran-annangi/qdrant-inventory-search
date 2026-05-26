@@ -15,6 +15,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # Ensure the repo root is in sys.path when Streamlit changes cwd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import json
 import streamlit as st
 
 from models.classifier import CLASSIFY_PROMPT
@@ -261,40 +262,66 @@ for r in results:
 # Evals
 # ---------------------------------------------------------------------------
 
+_EVAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_results.json")
+
+@st.cache_data(show_spinner=False)
+def _load_eval() -> dict:
+    """Load eval summary from eval_results.json (cached until file changes)."""
+    if not os.path.exists(_EVAL_PATH):
+        return {}
+    with open(_EVAL_PATH) as f:
+        return json.load(f).get("summary", {})
+
+def _row(s: dict, label_key: str, label_val: str) -> dict:
+    return {
+        label_key:  label_val,
+        "MRR@3":   s["MRR@3"],   "R@3":   s["Recall@3"],   "Miss@3":   s["Miss@3"],
+        "MRR@10":  s["MRR@10"],  "R@10":  s["Recall@10"],  "Miss@10":  s["Miss@10"],
+        "MRR@50":  s["MRR@50"],  "R@50":  s["Recall@50"],  "Miss@50":  s["Miss@50"],
+        "N": s["n"],
+    }
+
 st.divider()
 with st.expander("Evals", expanded=False):
+    ev = _load_eval()
+    if not ev:
+        st.warning("eval_results.json not found — run `python scripts/evaluate.py` to generate it.")
+        st.stop()
+
     st.caption("90 queries across electrical, mechanical, and plumbing | Gemini classifier | hybrid dense + BM25 + RRF")
 
     st.markdown("**Overall**")
+    ov = ev["overall"]
     st.dataframe([
-        {"Metric": "MRR@3",     "@3": 0.7481, "@10": 0.7575, "@50": 0.7592},
-        {"Metric": "Recall",    "@3": 0.8111, "@10": 0.8667, "@50": 0.8889},
-        {"Metric": "Miss",      "@3": 0.1889, "@10": 0.1333, "@50": 0.1111},
+        {"Metric": "MRR",    "@3": ov["MRR@3"],    "@10": ov["MRR@10"],    "@50": ov["MRR@50"]},
+        {"Metric": "Recall", "@3": ov["Recall@3"],  "@10": ov["Recall@10"],  "@50": ov["Recall@50"]},
+        {"Metric": "Miss",   "@3": ov["Miss@3"],    "@10": ov["Miss@10"],    "@50": ov["Miss@50"]},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By domain**")
     st.dataframe([
-        {"Domain": "Electrical", "MRR@3": 0.7611, "R@3": 0.8333, "Miss@3": 0.1667, "MRR@10": 0.7644, "R@10": 0.8667, "Miss@10": 0.1333, "MRR@50": 0.7694, "R@50": 0.9333, "Miss@50": 0.0667, "N": 30},
-        {"Domain": "Mechanical", "MRR@3": 0.7667, "R@3": 0.8333, "Miss@3": 0.1667, "MRR@10": 0.7733, "R@10": 0.8667, "Miss@10": 0.1333, "MRR@50": 0.7733, "R@50": 0.8667, "Miss@50": 0.1333, "N": 30},
-        {"Domain": "Plumbing",   "MRR@3": 0.7167, "R@3": 0.7667, "Miss@3": 0.2333, "MRR@10": 0.7347, "R@10": 0.8667, "Miss@10": 0.1333, "MRR@50": 0.7347, "R@50": 0.8667, "Miss@50": 0.1333, "N": 30},
+        _row(ev["electrical"], "Domain", "Electrical"),
+        _row(ev["mechanical"], "Domain", "Mechanical"),
+        _row(ev["plumbing"],   "Domain", "Plumbing"),
     ], hide_index=True, use_container_width=True)
 
     st.markdown("**By query type**")
     st.dataframe([
-        {"Query type": "Model number", "MRR@3": 0.9833, "R@3": 1.0000, "Miss@3": 0.0000, "MRR@10": 0.9833, "R@10": 1.0000, "Miss@10": 0.0000, "MRR@50": 0.9833, "R@50": 1.0000, "Miss@50": 0.0000, "N": 30},
-        {"Query type": "Technical",    "MRR@3": 0.7000, "R@3": 0.7667, "Miss@3": 0.2333, "MRR@10": 0.7067, "R@10": 0.8000, "Miss@10": 0.2000, "MRR@50": 0.7117, "R@50": 0.8667, "Miss@50": 0.1333, "N": 30},
-        {"Query type": "Descriptive",  "MRR@3": 0.5611, "R@3": 0.6667, "Miss@3": 0.3333, "MRR@10": 0.5825, "R@10": 0.8000, "Miss@10": 0.2000, "MRR@50": 0.5825, "R@50": 0.8000, "Miss@50": 0.2000, "N": 30},
+        _row(ev["model_number"], "Query type", "Model number"),
+        _row(ev["technical"],    "Query type", "Technical"),
+        _row(ev["descriptive"],  "Query type", "Descriptive"),
     ], hide_index=True, use_container_width=True)
 
     st.markdown("**By domain × query type**")
-    st.dataframe([
-        {"Domain": "Electrical", "Type": "Model number", "MRR@3": 1.0000, "R@3": 1.0000, "Miss@3": 0.0000, "MRR@10": 1.0000, "R@10": 1.0000, "Miss@10": 0.0000, "MRR@50": 1.0000, "R@50": 1.0000, "Miss@50": 0.0000, "N": 10},
-        {"Domain": "Electrical", "Type": "Technical",    "MRR@3": 0.7000, "R@3": 0.7000, "Miss@3": 0.3000, "MRR@10": 0.7000, "R@10": 0.7000, "Miss@10": 0.3000, "MRR@50": 0.7150, "R@50": 0.9000, "Miss@50": 0.1000, "N": 10},
-        {"Domain": "Electrical", "Type": "Descriptive",  "MRR@3": 0.5833, "R@3": 0.8000, "Miss@3": 0.2000, "MRR@10": 0.5933, "R@10": 0.9000, "Miss@10": 0.1000, "MRR@50": 0.5933, "R@50": 0.9000, "Miss@50": 0.1000, "N": 10},
-        {"Domain": "Mechanical", "Type": "Model number", "MRR@3": 0.9500, "R@3": 1.0000, "Miss@3": 0.0000, "MRR@10": 0.9500, "R@10": 1.0000, "Miss@10": 0.0000, "MRR@50": 0.9500, "R@50": 1.0000, "Miss@50": 0.0000, "N": 10},
-        {"Domain": "Mechanical", "Type": "Technical",    "MRR@3": 0.6500, "R@3": 0.7000, "Miss@3": 0.3000, "MRR@10": 0.6700, "R@10": 0.8000, "Miss@10": 0.2000, "MRR@50": 0.6700, "R@50": 0.8000, "Miss@50": 0.2000, "N": 10},
-        {"Domain": "Mechanical", "Type": "Descriptive",  "MRR@3": 0.7000, "R@3": 0.8000, "Miss@3": 0.2000, "MRR@10": 0.7000, "R@10": 0.8000, "Miss@10": 0.2000, "MRR@50": 0.7000, "R@50": 0.8000, "Miss@50": 0.2000, "N": 10},
-        {"Domain": "Plumbing",   "Type": "Model number", "MRR@3": 1.0000, "R@3": 1.0000, "Miss@3": 0.0000, "MRR@10": 1.0000, "R@10": 1.0000, "Miss@10": 0.0000, "MRR@50": 1.0000, "R@50": 1.0000, "Miss@50": 0.0000, "N": 10},
-        {"Domain": "Plumbing",   "Type": "Technical",    "MRR@3": 0.7500, "R@3": 0.9000, "Miss@3": 0.1000, "MRR@10": 0.7500, "R@10": 0.9000, "Miss@10": 0.1000, "MRR@50": 0.7500, "R@50": 0.9000, "Miss@50": 0.1000, "N": 10},
-        {"Domain": "Plumbing",   "Type": "Descriptive",  "MRR@3": 0.4000, "R@3": 0.4000, "Miss@3": 0.6000, "MRR@10": 0.4542, "R@10": 0.7000, "Miss@10": 0.3000, "MRR@50": 0.4542, "R@50": 0.7000, "Miss@50": 0.3000, "N": 10},
-    ], hide_index=True, use_container_width=True)
+    domain_type_rows = []
+    for domain in ("electrical", "mechanical", "plumbing"):
+        for qtype in ("model_number", "technical", "descriptive"):
+            key = f"{domain}/{qtype}"
+            if key in ev:
+                r = _row(ev[key], "Type", qtype.replace("_", " ").title())
+                r["Domain"] = domain.title()
+                # reorder columns
+                domain_type_rows.append({k: r[k] for k in
+                    ["Domain", "Type", "MRR@3", "R@3", "Miss@3",
+                     "MRR@10", "R@10", "Miss@10", "MRR@50", "R@50", "Miss@50", "N"]})
+    st.dataframe(domain_type_rows, hide_index=True, use_container_width=True)
