@@ -11,8 +11,8 @@ inventory_data/*
 # Trained classifier model
 query_classifier.joblib
 
-# Eval output files
-eval_results*.json
+# Eval output files — keep the canonical results, ignore variants
+eval_results_*.json
 eval2_results*.json
 
 # Python
