@@ -267,34 +267,34 @@ with st.expander("Evals", expanded=False):
 
     st.markdown("**Overall**")
     st.dataframe([
-        {"Metric": "MRR@3",    "Score": 0.7481},
-        {"Metric": "Recall@3", "Score": 0.8111},
-        {"Metric": "Miss@3",   "Score": 0.1889},
+        {"Metric": "MRR@3",     "@3": 0.7481, "@10": 0.7575, "@50": 0.7592},
+        {"Metric": "Recall",    "@3": 0.8111, "@10": 0.8667, "@50": 0.8889},
+        {"Metric": "Miss",      "@3": 0.1889, "@10": 0.1333, "@50": 0.1111},
     ], hide_index=True, use_container_width=False)
 
     st.markdown("**By domain**")
     st.dataframe([
-        {"Domain": "Electrical", "MRR@3": 0.7611, "Recall@3": 0.8333, "Miss@3": 0.1667, "N": 30},
-        {"Domain": "Mechanical", "MRR@3": 0.7667, "Recall@3": 0.8333, "Miss@3": 0.1667, "N": 30},
-        {"Domain": "Plumbing",   "MRR@3": 0.7167, "Recall@3": 0.7667, "Miss@3": 0.2333, "N": 30},
-    ], hide_index=True, use_container_width=False)
+        {"Domain": "Electrical", "MRR@3": 0.7611, "R@3": 0.8333, "Miss@3": 0.1667, "MRR@10": 0.7644, "R@10": 0.8667, "Miss@10": 0.1333, "MRR@50": 0.7694, "R@50": 0.9333, "Miss@50": 0.0667, "N": 30},
+        {"Domain": "Mechanical", "MRR@3": 0.7667, "R@3": 0.8333, "Miss@3": 0.1667, "MRR@10": 0.7733, "R@10": 0.8667, "Miss@10": 0.1333, "MRR@50": 0.7733, "R@50": 0.8667, "Miss@50": 0.1333, "N": 30},
+        {"Domain": "Plumbing",   "MRR@3": 0.7167, "R@3": 0.7667, "Miss@3": 0.2333, "MRR@10": 0.7347, "R@10": 0.8667, "Miss@10": 0.1333, "MRR@50": 0.7347, "R@50": 0.8667, "Miss@50": 0.1333, "N": 30},
+    ], hide_index=True, use_container_width=True)
 
     st.markdown("**By query type**")
     st.dataframe([
-        {"Query type": "Model number", "MRR@3": 0.9833, "Recall@3": 1.0000, "Miss@3": 0.0000, "N": 30},
-        {"Query type": "Technical",    "MRR@3": 0.7000, "Recall@3": 0.7667, "Miss@3": 0.2333, "N": 30},
-        {"Query type": "Descriptive",  "MRR@3": 0.5611, "Recall@3": 0.6667, "Miss@3": 0.3333, "N": 30},
-    ], hide_index=True, use_container_width=False)
+        {"Query type": "Model number", "MRR@3": 0.9833, "R@3": 1.0000, "Miss@3": 0.0000, "MRR@10": 0.9833, "R@10": 1.0000, "Miss@10": 0.0000, "MRR@50": 0.9833, "R@50": 1.0000, "Miss@50": 0.0000, "N": 30},
+        {"Query type": "Technical",    "MRR@3": 0.7000, "R@3": 0.7667, "Miss@3": 0.2333, "MRR@10": 0.7067, "R@10": 0.8000, "Miss@10": 0.2000, "MRR@50": 0.7117, "R@50": 0.8667, "Miss@50": 0.1333, "N": 30},
+        {"Query type": "Descriptive",  "MRR@3": 0.5611, "R@3": 0.6667, "Miss@3": 0.3333, "MRR@10": 0.5825, "R@10": 0.8000, "Miss@10": 0.2000, "MRR@50": 0.5825, "R@50": 0.8000, "Miss@50": 0.2000, "N": 30},
+    ], hide_index=True, use_container_width=True)
 
     st.markdown("**By domain × query type**")
     st.dataframe([
-        {"Domain": "Electrical", "Query type": "Model number", "MRR@3": 1.0000, "Recall@3": 1.0000, "Miss@3": 0.0000, "N": 10},
-        {"Domain": "Electrical", "Query type": "Technical",    "MRR@3": 0.7000, "Recall@3": 0.7000, "Miss@3": 0.3000, "N": 10},
-        {"Domain": "Electrical", "Query type": "Descriptive",  "MRR@3": 0.5833, "Recall@3": 0.8000, "Miss@3": 0.2000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Model number", "MRR@3": 0.9500, "Recall@3": 1.0000, "Miss@3": 0.0000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Technical",    "MRR@3": 0.6500, "Recall@3": 0.7000, "Miss@3": 0.3000, "N": 10},
-        {"Domain": "Mechanical", "Query type": "Descriptive",  "MRR@3": 0.7000, "Recall@3": 0.8000, "Miss@3": 0.2000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Model number", "MRR@3": 1.0000, "Recall@3": 1.0000, "Miss@3": 0.0000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Technical",    "MRR@3": 0.7500, "Recall@3": 0.9000, "Miss@3": 0.1000, "N": 10},
-        {"Domain": "Plumbing",   "Query type": "Descriptive",  "MRR@3": 0.4000, "Recall@3": 0.4000, "Miss@3": 0.6000, "N": 10},
+        {"Domain": "Electrical", "Type": "Model number", "MRR@3": 1.0000, "R@3": 1.0000, "Miss@3": 0.0000, "MRR@10": 1.0000, "R@10": 1.0000, "Miss@10": 0.0000, "MRR@50": 1.0000, "R@50": 1.0000, "Miss@50": 0.0000, "N": 10},
+        {"Domain": "Electrical", "Type": "Technical",    "MRR@3": 0.7000, "R@3": 0.7000, "Miss@3": 0.3000, "MRR@10": 0.7000, "R@10": 0.7000, "Miss@10": 0.3000, "MRR@50": 0.7150, "R@50": 0.9000, "Miss@50": 0.1000, "N": 10},
+        {"Domain": "Electrical", "Type": "Descriptive",  "MRR@3": 0.5833, "R@3": 0.8000, "Miss@3": 0.2000, "MRR@10": 0.5933, "R@10": 0.9000, "Miss@10": 0.1000, "MRR@50": 0.5933, "R@50": 0.9000, "Miss@50": 0.1000, "N": 10},
+        {"Domain": "Mechanical", "Type": "Model number", "MRR@3": 0.9500, "R@3": 1.0000, "Miss@3": 0.0000, "MRR@10": 0.9500, "R@10": 1.0000, "Miss@10": 0.0000, "MRR@50": 0.9500, "R@50": 1.0000, "Miss@50": 0.0000, "N": 10},
+        {"Domain": "Mechanical", "Type": "Technical",    "MRR@3": 0.6500, "R@3": 0.7000, "Miss@3": 0.3000, "MRR@10": 0.6700, "R@10": 0.8000, "Miss@10": 0.2000, "MRR@50": 0.6700, "R@50": 0.8000, "Miss@50": 0.2000, "N": 10},
+        {"Domain": "Mechanical", "Type": "Descriptive",  "MRR@3": 0.7000, "R@3": 0.8000, "Miss@3": 0.2000, "MRR@10": 0.7000, "R@10": 0.8000, "Miss@10": 0.2000, "MRR@50": 0.7000, "R@50": 0.8000, "Miss@50": 0.2000, "N": 10},
+        {"Domain": "Plumbing",   "Type": "Model number", "MRR@3": 1.0000, "R@3": 1.0000, "Miss@3": 0.0000, "MRR@10": 1.0000, "R@10": 1.0000, "Miss@10": 0.0000, "MRR@50": 1.0000, "R@50": 1.0000, "Miss@50": 0.0000, "N": 10},
+        {"Domain": "Plumbing",   "Type": "Technical",    "MRR@3": 0.7500, "R@3": 0.9000, "Miss@3": 0.1000, "MRR@10": 0.7500, "R@10": 0.9000, "Miss@10": 0.1000, "MRR@50": 0.7500, "R@50": 0.9000, "Miss@50": 0.1000, "N": 10},
+        {"Domain": "Plumbing",   "Type": "Descriptive",  "MRR@3": 0.4000, "R@3": 0.4000, "Miss@3": 0.6000, "MRR@10": 0.4542, "R@10": 0.7000, "Miss@10": 0.3000, "MRR@50": 0.4542, "R@50": 0.7000, "Miss@50": 0.3000, "N": 10},
     ], hide_index=True, use_container_width=True)
