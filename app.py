@@ -132,9 +132,10 @@ st.session_state.last_query = query
 
 # Run search
 with st.spinner("Searching..."):
-    results, query_type, timings, ret_counts = search_with_observability(
+    results, query_type, timings, ret_counts, full_pool = search_with_observability(
         query.strip(), source_filter=source_filter
     )
+st.session_state["full_pool"] = full_pool
 
 # ---------------------------------------------------------------------------
 # Pipeline observability
@@ -171,7 +172,13 @@ rc3.metric("Sparse (desc)",  ret_counts["sparse_desc"],  help="Candidates from B
 st.divider()
 
 for r in results:
-    header = f"#{r['rank']}  |  {r['model_number']}  |  {r['manufacturer_name']}"
+    rrf_rank  = r.get("rrf_rank") or "?"
+    ce_score  = r["reranker_score"]
+    rrf_score = r["rrf_score"]
+    header = (
+        f"#{r['rank']}  |  {r['model_number']}  |  {r['manufacturer_name']}  "
+        f"  CE: {ce_score:.2f}  ·  RRF score: {rrf_score:.4f}  (was RRF rank #{rrf_rank})"
+    )
 
     with st.expander(header, expanded=True):
         left, right = st.columns([3, 1])
@@ -257,6 +264,60 @@ for r in results:
                 unsafe_allow_html=True,
             )
             st.json(r["raw_payload"])
+
+# ---------------------------------------------------------------------------
+# ERP ID / model-number lookup
+# ---------------------------------------------------------------------------
+
+st.divider()
+with st.expander("🔍  ERP ID / Model number position lookup", expanded=False):
+    st.caption(
+        "Enter an internal ID or model number to check if it appeared in the "
+        "top-50 RRF candidate pool and where the reranker placed it."
+    )
+    lookup_id = st.text_input(
+        "ERP ID or model number",
+        placeholder="e.g. 12345  or  12345_0  or  AB-XYZ",
+        label_visibility="collapsed",
+        key="erp_lookup",
+    )
+
+    pool = st.session_state.get("full_pool", [])
+
+    if lookup_id and lookup_id.strip() and pool:
+        needle = lookup_id.strip().lower()
+
+        def _pool_match(entry: dict) -> bool:
+            iid = str(entry["internal_id"]).lower()
+            mn  = str(entry["model_number"]).lower()
+            if iid == needle or mn == needle:
+                return True
+            # Burnaby DC variant: "99999_0" matches "99999"
+            if iid.startswith(needle + "_"):
+                return True
+            return False
+
+        matches = [e for e in pool if _pool_match(e)]
+
+        if not matches:
+            st.error(f"**Not found** — `{lookup_id}` was not in the top-{len(pool)} RRF candidates for this query.")
+        else:
+            for m in matches:
+                rrf_r    = m["rrf_rank"]
+                rerank_r = m["rerank_rank"] or "?"
+                pool_n   = len(pool)
+                ce       = m["reranker_score"]
+                rrf_s    = m["rrf_score"]
+                st.success(
+                    f"**Found!**  Internal ID: `{m['internal_id']}`  |  Model: `{m['model_number']}`  |  Source: `{m['source']}`\n\n"
+                    f"- **RRF pool**: rank **#{rrf_r}** / {pool_n}   (RRF score: {rrf_s})\n"
+                    f"- **After reranking**: rank **#{rerank_r}** / {pool_n}   (CE score: {ce:.4f})"
+                )
+                st.caption(m["description"])
+
+    elif lookup_id and lookup_id.strip() and not pool:
+        st.warning("Run a search first — the candidate pool is empty.")
+
 
 # ---------------------------------------------------------------------------
 # Evals

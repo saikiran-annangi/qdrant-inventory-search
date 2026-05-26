@@ -106,7 +106,7 @@ def search(
 
 def search_with_observability(
     query: str,
-    limit: int = 3,
+    limit: int = 10,
     rerank_top_k: int = 50,
     source_filter: str = None,
 ) -> tuple:
@@ -115,12 +115,16 @@ def search_with_observability(
     and per-retriever attribution.
 
     Returns:
-        results          -- list of result dicts (see keys below)
+        results          -- list of result dicts (top `limit` after reranking)
         query_type       -- classified query type string
         timings          -- dict of step timings in milliseconds:
                            classify_ms, encode_ms, retrieve_ms, rerank_ms, total_ms
         retriever_counts -- dict with candidate counts per retriever in the RRF pool:
                            dense, sparse_model, sparse_desc, rrf_pool_size
+        full_pool        -- all rerank_top_k candidates with both their RRF rank and
+                           post-rerank rank; used for ERP ID / model number lookups.
+                           Keys: rrf_rank, rerank_rank, internal_id, model_number,
+                                 source, description, rrf_score, reranker_score
 
     Result dict keys:
         rank, id, reranker_score, rrf_score,
@@ -182,28 +186,33 @@ def search_with_observability(
         limit=rerank_top_k,
         with_payload=True,
     )
-    hits = rrf_resp.points
-    rrf_scores = {str(h.id): round(float(h.score), 6) for h in hits}
+    rrf_hits = rrf_resp.points   # ordered by RRF score (best first)
+    rrf_scores = {str(h.id): round(float(h.score), 6) for h in rrf_hits}
+    # Record each hit's RRF rank (1-based) before reranking changes the order
+    rrf_rank_map = {str(h.id): i for i, h in enumerate(rrf_hits, 1)}
     timings["retrieve_ms"] = round((time.perf_counter() - t0) * 1000, 1)
 
-    rrf_pool_ids = {str(h.id) for h in hits}
+    rrf_pool_ids = {str(h.id) for h in rrf_hits}
     retriever_counts = {
         "dense":         sum(1 for i in rrf_pool_ids if i in dense_map),
         "sparse_model":  sum(1 for i in rrf_pool_ids if i in sm_map),
         "sparse_desc":   sum(1 for i in rrf_pool_ids if i in sd_map),
-        "rrf_pool_size": len(hits),
+        "rrf_pool_size": len(rrf_hits),
     }
 
     t0 = time.perf_counter()
     reranker_scores: dict = {}
+    hits = list(rrf_hits)
     if hits:
         hits, reranker_scores = rerank_with_scores(query, hits)
-        hits = hits[:limit]
+    # Record post-rerank position for every candidate
+    rerank_rank_map = {str(h.id): i for i, h in enumerate(hits, 1)}
+    display_hits = hits[:limit]
     timings["rerank_ms"] = round((time.perf_counter() - t0) * 1000, 1)
     timings["total_ms"]  = round(sum(timings.values()), 1)
 
     results = []
-    for rank, hit in enumerate(hits, 1):
+    for rank, hit in enumerate(display_hits, 1):
         p   = hit.payload
         hid = str(hit.id)
 
@@ -219,6 +228,7 @@ def search_with_observability(
 
         results.append({
             "rank":               rank,
+            "rrf_rank":           rrf_rank_map.get(hid),
             "id":                 hid,
             "reranker_score":     round(reranker_scores.get(hid, float(hit.score)), 4),
             "rrf_score":          rrf_scores.get(hid, 0.0),
@@ -241,7 +251,24 @@ def search_with_observability(
             "raw_payload":        dict(p),
         })
 
-    return results, query_type, timings, retriever_counts
+    # Full candidate pool — all rerank_top_k hits with both rank positions.
+    # Used by the ERP ID / model-number lookup widget in the UI.
+    full_pool = []
+    for hit in rrf_hits:
+        hid = str(hit.id)
+        p   = hit.payload
+        full_pool.append({
+            "rrf_rank":      rrf_rank_map[hid],
+            "rerank_rank":   rerank_rank_map.get(hid),
+            "internal_id":   p.get("internal_id")   or "",
+            "model_number":  p.get("model_number")  or "",
+            "source":        p.get("source")        or "",
+            "description":   str(p.get("description") or "")[:100],
+            "rrf_score":     rrf_scores[hid],
+            "reranker_score": round(reranker_scores.get(hid, 0.0), 4),
+        })
+
+    return results, query_type, timings, retriever_counts, full_pool
 
 
 def _format_results(hits: list, query_type: str) -> List[dict]:
