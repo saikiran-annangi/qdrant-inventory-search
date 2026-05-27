@@ -199,6 +199,9 @@ for r in results:
         with left:
             st.markdown("**Description**")
             st.write(r["description"])
+            if r.get("extended_description"):
+                st.markdown("**Extended Description**")
+                st.write(r["extended_description"])
             st.markdown(
                 f'<span class="meta">'
                 f'Category: {r["product_category"]}&nbsp;&nbsp;|&nbsp;&nbsp;'
