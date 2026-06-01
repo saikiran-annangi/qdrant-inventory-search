@@ -246,12 +246,11 @@ def make_id(source: str, internal_id: str) -> str:
     """
     Deterministic UUID from (source, internal_id).
 
-    Wraps MD5 in uuid.UUID so the ID is a valid Qdrant UUID string.
-    Idempotent — same (source, internal_id) always produces the same ID.
+    Using MD5 ensures the same product always maps to the same Qdrant point ID,
+    making ingestion idempotent via upsert.
     """
-    import uuid
     raw = f"{source}:{internal_id}"
-    return str(uuid.UUID(hashlib.md5(raw.encode()).hexdigest()))
+    return hashlib.md5(raw.encode()).hexdigest()
 
 
 def is_sparse_description(desc) -> bool:
