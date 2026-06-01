@@ -37,9 +37,9 @@ from qdrant_client.models import (
     TokenizerType,
 )
 
-from config import QDRANT_URL, COLLECTION_NAME, DENSE_DIM
+from config import QDRANT_URL, QDRANT_API_KEY, COLLECTION_NAME, DENSE_DIM
 
-client = QdrantClient(url=QDRANT_URL, check_compatibility=False)
+client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, check_compatibility=False)
 
 existing = [c.name for c in client.get_collections().collections]
 if COLLECTION_NAME in existing:
@@ -127,6 +127,14 @@ client.create_payload_index(
     field_name="locations[].qoh",
     field_schema=PayloadSchemaType.INTEGER,
 )
+
+# Taxonomy keyword indexes for the 4th RRF channel filter
+for field in ("taxonomy_domain", "taxonomy_category", "taxonomy_subcategory"):
+    client.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name=field,
+        field_schema=PayloadSchemaType.KEYWORD,
+    )
 
 print("All payload indexes created.")
 
