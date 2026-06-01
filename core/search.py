@@ -22,6 +22,43 @@ from core.filters import build_filter
 from models.classifier import classify_query
 from models.embeddings import encode_query
 from models.reranker import rerank, rerank_with_scores
+from data.normalizers import size_anchor_tokens, doc_size_anchors
+
+
+def _size_relation(hit, want: set) -> str:
+    """'match' if a doc size equals a queried size, 'conflict' if it states a
+    size but none matches, else 'none' (no size stated)."""
+    if not want:
+        return "none"
+    doc = doc_size_anchors(hit.payload.get("description"))
+    if want & doc:
+        return "match"
+    return "conflict" if doc else "none"
+
+
+def apply_size_sort(query, hits, ce_scores):
+    """Re-order reranked hits by their size relation to the query.
+
+    The cross-encoder is size-blind (it can rank a 1/2IN part above a 2IN one).
+    This tiered sort restores size intent without retraining:
+      tier 2 (top)    -- doc size matches a queried size
+      tier 1 (middle) -- doc states no size (silent on the attribute)
+      tier 0 (bottom) -- doc states a size and none matches
+    CE score is the tiebreaker within each tier. No-op when the query carries
+    no size anchor, so it is safe to leave on for every query.
+    Metric bridging (imperial<->metric) is always enabled on the query side.
+    """
+    if not hits:
+        return hits
+    want = size_anchor_tokens(query, bridge_metric=True)
+    if not want:
+        return hits
+
+    def ce(h):
+        return ce_scores.get(str(h.id), float(h.score))
+
+    tier = {"match": 2, "none": 1, "conflict": 0}
+    return sorted(hits, key=lambda h: (tier[_size_relation(h, want)], ce(h)), reverse=True)
 
 
 def search(
@@ -98,7 +135,8 @@ def search(
     hits = results.points
 
     if use_reranker and hits:
-        hits = rerank(query, hits)
+        hits, ce_scores = rerank_with_scores(query, hits)
+        hits = apply_size_sort(query, hits, ce_scores)
         hits = hits[:limit]
 
     return _format_results(hits, query_type)
@@ -122,9 +160,11 @@ def search_with_observability(
         retriever_counts -- dict with candidate counts per retriever in the RRF pool:
                            dense, sparse_model, sparse_desc, rrf_pool_size
         full_pool        -- all rerank_top_k candidates with both their RRF rank and
-                           post-rerank rank; used for ERP ID / model number lookups.
+                           post-rerank rank; used for the ERP ID lookup.
                            Keys: rrf_rank, rerank_rank, internal_id, model_number,
                                  source, description, rrf_score, reranker_score
+        channel_hits     -- per-retriever membership for the ERP ID lookup:
+                           {"dense"|"sparse_model"|"sparse_desc": {internal_id: rank}}
 
     Result dict keys:
         rank, id, reranker_score, rrf_score,
@@ -151,21 +191,39 @@ def search_with_observability(
 
     # Run each active retriever individually to capture per-retriever scores
     # for the attribution display. Channels with limit=0 are skipped.
+    # with_payload=["internal_id"] lets the ERP-ID lookup report whether (and at
+    # what rank) a given ID was surfaced by each retriever.
     dense_pts, sm_pts, sd_pts = [], [], []
     if limits["dense"] > 0:
         dense_pts = client.query_points(
             COLLECTION_NAME, query=dense_vec, using="dense",
-            limit=limits["dense"], with_payload=False, query_filter=qdrant_filter,
+            limit=limits["dense"], with_payload=["internal_id"], query_filter=qdrant_filter,
         ).points
     sm_pts = client.query_points(
         COLLECTION_NAME, query=sm_vec, using="sparse_model",
-        limit=limits["sparse_model"], with_payload=False, query_filter=qdrant_filter,
+        limit=limits["sparse_model"], with_payload=["internal_id"], query_filter=qdrant_filter,
     ).points
     if limits["sparse_desc"] > 0:
         sd_pts = client.query_points(
             COLLECTION_NAME, query=sd_vec, using="sparse_desc",
-            limit=limits["sparse_desc"], with_payload=False, query_filter=qdrant_filter,
+            limit=limits["sparse_desc"], with_payload=["internal_id"], query_filter=qdrant_filter,
         ).points
+
+    def _iid_ranks(pts):
+        """internal_id (lowercased) -> 1-based rank within this retriever's list."""
+        out = {}
+        for i, p in enumerate(pts, 1):
+            iid = str((p.payload or {}).get("internal_id", "")).strip().lower()
+            if iid and iid not in out:
+                out[iid] = i
+        return out
+
+    # Per-retriever membership keyed by internal_id, used by the ERP-ID lookup.
+    channel_hits = {
+        "dense":        _iid_ranks(dense_pts),
+        "sparse_model": _iid_ranks(sm_pts),
+        "sparse_desc":  _iid_ranks(sd_pts),
+    }
 
     dense_map = {str(p.id): round(float(p.score), 4) for p in dense_pts}
     sm_map    = {str(p.id): round(float(p.score), 4) for p in sm_pts}
@@ -205,6 +263,7 @@ def search_with_observability(
     hits = list(rrf_hits)
     if hits:
         hits, reranker_scores = rerank_with_scores(query, hits)
+        hits = apply_size_sort(query, hits, reranker_scores)
     # Record post-rerank position for every candidate
     rerank_rank_map = {str(h.id): i for i, h in enumerate(hits, 1)}
     display_hits = hits[:limit]
@@ -269,7 +328,7 @@ def search_with_observability(
             "reranker_score": round(reranker_scores.get(hid, 0.0), 4),
         })
 
-    return results, query_type, timings, retriever_counts, full_pool
+    return results, query_type, timings, retriever_counts, full_pool, channel_hits
 
 
 def _format_results(hits: list, query_type: str) -> List[dict]:

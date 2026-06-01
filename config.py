@@ -16,8 +16,9 @@ except ImportError:
 # Qdrant
 # ---------------------------------------------------------------------------
 
-QDRANT_URL     = os.getenv("QDRANT_URL", "http://localhost:6333")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", None)   # required for Qdrant Cloud
+QDRANT_URL       = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY   = os.getenv("QDRANT_API_KEY", None)   # required for Qdrant Cloud
+QDRANT_LOCAL_PATH = os.getenv("QDRANT_LOCAL_PATH", "")  # if set, use a local embedded store
 COLLECTION_NAME = "inventory"
 DENSE_DIM = 768  # all-mpnet-base-v2 output dimension
 
@@ -37,9 +38,6 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # Raw inventory CSVs / XLSXs go here (gitignored)
 DATA_DIR = os.path.join(REPO_ROOT, "inventory_data")
-
-# Trained LR classifier (produced by scripts/build_classifier.py)
-CLASSIFIER_PATH = os.path.join(REPO_ROOT, "query_classifier.joblib")
 
 # ---------------------------------------------------------------------------
 # Retrieval tuning: prefetch limits per query type

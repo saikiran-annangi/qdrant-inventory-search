@@ -11,13 +11,11 @@ pandas>=2.0.0
 openpyxl>=3.1.0       # required by pandas for .xlsx files
 numpy>=1.26.0
 
-# Query classification
-openai>=1.30.0         # used for the OpenRouter-compatible API call
-scikit-learn>=1.4.0    # logistic regression classifier
-joblib>=1.3.0          # model serialization
+# Unit-aware dimension parsing (data/normalizers.py)
+pint>=0.24.0
 
-# Description generation during ingestion (optional)
-google-generativeai>=0.7.0
+# Query classification (OpenRouter Gemini 2.5 Flash)
+openai>=1.30.0        # OpenAI-compatible client for OpenRouter
 
 # Environment variables
 python-dotenv>=1.0.0

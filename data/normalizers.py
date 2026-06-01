@@ -11,8 +11,20 @@ Functions:
 
 import re
 import hashlib
+import logging
 
 import pandas as pd
+import pint
+
+_log = logging.getLogger(__name__)
+
+# Single shared unit registry — pint is for the unit math; the regex layer below
+# is only for finding number-with-unit spans inside free text (which pint itself
+# doesn't do). Inch sign (") and the metric `mm` alias don't need extra config —
+# they're in pint's default registry.
+_UREG = pint.UnitRegistry(autoconvert_offset_to_baseunit=True)
+_INCH = _UREG.inch
+_MM   = _UREG.millimeter
 
 # ---------------------------------------------------------------------------
 # Manufacturer alias table
@@ -75,18 +87,136 @@ def normalize_manufacturer(name: str) -> str:
     return MFR_ALIASES.get(name, name)
 
 
-def normalize_specs(text: str) -> str:
-    """
-    Expand unit abbreviations in text for BM25 index coverage.
+# ---------------------------------------------------------------------------
+# Dimension normalization (inch / fraction / mixed / mm)
+# ---------------------------------------------------------------------------
+# Sizes appear in many inconsistent surface forms across the catalog: glued
+# `4IN`, fractions `3/4IN`, mixed `1-1/4IN`, double-quote `2"`, metric `50MM`.
+# BM25 splits on punctuation, so `3/4in` shatters and `1/2IN` collides with
+# `2IN` (both yield a `2in` token). We collapse every size to a punctuation-free,
+# high-IDF anchor applied identically to documents and queries:
+#
+#     sizeN   N = round(inches * 100)   e.g. 2" -> size200, 3/4" -> size75
+#     mmN     N = round(millimetres)    e.g. 50MM -> mm50
+#
+# bridge_metric=True additionally cross-emits the other unit system on the
+# QUERY side (inch->mm with a +/-1 window, mm->inch) so an imperial query can
+# reach the metric catalog. It is noisy (nominal sizes), hence opt-in.
 
-    Example: "16A 1 POLE" -> "16a 16amp 16ampere 1p single pole"
+MM_PER_IN = 25.4
+
+# One scanner finds any "<number-form><unit>" span; pint then does the unit math.
+# The number form may be: int, decimal, simple fraction (3/4), or mixed (1-1/2).
+# The unit may be: in / inch / inches (case-insensitive) / " / mm (case-insensitive),
+# with optional space- or hyphen-separator between number and unit. This single
+# pattern replaces the previous trio of handcrafted dimension regexes.
+_NUM_FORM   = r"\d+(?:\.\d+)?(?:-\d+/\d+|/\d+)?"
+_UNIT_FORM  = r"inches|inch|in|\"|mm"
+_DIM_SCAN   = re.compile(
+    # Lookbehind: don't match mid-word (e.g. "P12in" -> "12in").
+    # Lookahead:  must NOT be followed by a letter or digit. Excluding digits
+    #             is what stops "2.5MM2" (wire cross-section mm^2) and "MM22"
+    #             from being read as a 2.5 mm length. Lets through spaces,
+    #             punctuation, end-of-string.
+    rf"(?<![A-Za-z0-9_])({_NUM_FORM})[\s\-]*({_UNIT_FORM})(?![A-Za-z0-9²])",
+    re.IGNORECASE,
+)
+_ANCHOR_RE  = re.compile(r"\b(?:size|mm)\d+\b")
+
+
+def _parse_number(s: str):  # -> Optional[float]; py3.9 compat (no PEP 604 union)
+    """Turn '2', '2.5', '3/4', '1-1/2' into a float. None on unparseable."""
+    s = s.strip()
+    m = re.fullmatch(r"(\d+)-(\d+)/(\d+)", s)        # 1-1/2
+    if m:
+        a, b, c = (int(g) for g in m.groups())
+        return a + (b / c) if c else None
+    m = re.fullmatch(r"(\d+)/(\d+)", s)              # 3/4
+    if m:
+        a, b = (int(g) for g in m.groups())
+        return a / b if b else None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _quantity(num_str: str, unit_str: str):
+    """Build a pint Quantity from messy MEP forms. None if anything fails."""
+    val = _parse_number(num_str)
+    if val is None:
+        return None
+    u = unit_str.lower()
+    if u in ('"', "in", "inch", "inches"):
+        return val * _INCH
+    if u == "mm":
+        return val * _MM
+    return None
+
+
+def _inch_tokens(inches: float, bridge_metric: bool) -> list:
+    toks = [f"size{int(round(inches * 100))}"]
+    if float(inches).is_integer():
+        toks.append(f"{int(inches)}in")
+    if bridge_metric:
+        base = int(round(inches * MM_PER_IN))
+        toks += [f"mm{base + d}" for d in (-1, 0, 1)]
+    return toks
+
+
+def _mm_tokens(mm: float, bridge_metric: bool) -> list:
+    toks = [f"mm{int(round(mm))}"]
+    if bridge_metric:
+        toks.append(f"size{int(round((mm / MM_PER_IN) * 100))}")
+    return toks
+
+
+def _dim_replacement(match: re.Match, bridge_metric: bool) -> str:
+    q = _quantity(match.group(1), match.group(2))
+    if q is None:
+        return match.group(0)
+    if q.units == _INCH:
+        toks = _inch_tokens(q.to("inch").magnitude, bridge_metric)
+    elif q.units == _MM:
+        toks = _mm_tokens(q.to("mm").magnitude, bridge_metric)
+    else:
+        return match.group(0)
+    return " " + " ".join(toks) + " "
+
+
+def normalize_specs(text: str, bridge_metric: bool = False) -> str:
+    """
+    Expand unit abbreviations for BM25 index coverage, including size/dimension
+    attributes collapsed to canonical anchor tokens. Safe to apply identically
+    to documents (ingest) and queries.
+
+    Examples:
+        "16A 1 POLE" -> "16a 16amp 16ampere 1p single pole"
+        "2 inch pipe" / "2 inches pipe" / "2-inch pipe" / '2" pipe' / "2IN pipe"
+            -> "size200 2in pipe"
+        '3/4" coupling' / "3/4 inch coupling" -> "size75 coupling"
+        "1-1/2 inches conduit" -> "size150 conduit"
     """
     if not text:
         return ""
     result = text.upper()
     for pattern, replacement in SPEC_PATTERNS:
         result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
-    return result.lower()
+    result = result.lower()
+
+    result = _DIM_SCAN.sub(lambda m: _dim_replacement(m, bridge_metric), result)
+
+    return re.sub(r"\s+", " ", result).strip()
+
+
+def size_anchor_tokens(query: str, bridge_metric: bool = False) -> set:
+    """Canonical sizeNNN/mmNNN anchors a query is asking for (size-aware rerank)."""
+    return set(_ANCHOR_RE.findall(normalize_specs(query, bridge_metric=bridge_metric)))
+
+
+def doc_size_anchors(text: str) -> set:
+    """Canonical size anchors present in a document's text (no metric bridging)."""
+    return set(_ANCHOR_RE.findall(normalize_specs(text or "")))
 
 
 def model_number_variants(model: str) -> str:

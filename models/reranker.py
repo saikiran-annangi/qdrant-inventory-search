@@ -50,8 +50,11 @@ def rerank_with_scores(query: str, hits: list) -> tuple:
 
     pairs = []
     for hit in hits:
+        # extended_description (LLM-enriched, richer text) is included when present
+        # so the cross-encoder has more natural-language context to judge relevance.
         doc_text = " ".join(filter(None, [
             hit.payload.get("description", ""),
+            hit.payload.get("extended_description") or "",
             hit.payload.get("manufacturer_name", ""),
             hit.payload.get("model_number", ""),
             hit.payload.get("product_category", ""),
