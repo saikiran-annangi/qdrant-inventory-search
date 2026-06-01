@@ -22,6 +22,7 @@ from models.classifier import CLASSIFY_PROMPT
 from models.embeddings import get_dense_model, get_bm25_model
 from models.reranker import get_reranker
 from core.search import search_with_observability
+from config import PREFETCH_LIMITS
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -139,6 +140,7 @@ if search_clicked or st.session_state.get("_search_key") != _cache_key:
     st.session_state["_timings"]         = _r[2]
     st.session_state["_ret_counts"]      = _r[3]
     st.session_state["_full_pool"]       = _r[4]
+    st.session_state["_channel_hits"]    = _r[5]
 
 # Always render from session state — safe across any rerun
 if "_search_results" not in st.session_state:
@@ -282,123 +284,86 @@ for r in results:
             st.json(r["raw_payload"])
 
 # ---------------------------------------------------------------------------
-# ERP ID / model-number lookup
+# ERP ID lookup — trace one ERP ID through this query's pipeline
 # ---------------------------------------------------------------------------
 
 st.divider()
-with st.expander("ERP ID / Model number position lookup", expanded=False):
+with st.expander("ERP ID lookup", expanded=False):
     st.caption(
-        "Enter an internal ID or model number to check if it appeared in the "
-        "top-50 RRF candidate pool and where the reranker placed it."
+        "Enter an ERP ID to trace it through THIS query's pipeline: "
+        "(1) which retrievers surfaced it, (2) whether it reached the RRF pool, "
+        "(3) where the reranker placed it."
     )
     lookup_id = st.text_input(
-        "ERP ID or model number",
-        placeholder="e.g. 12345  or  12345_0  or  AB-XYZ",
+        "ERP ID",
+        placeholder="e.g. 30-0101",
         label_visibility="collapsed",
         key="erp_lookup",
     )
 
-    pool = st.session_state.get("_full_pool", [])
+    channel_hits = st.session_state.get("_channel_hits", {})
+    pool         = st.session_state.get("_full_pool", [])
 
-    if lookup_id and lookup_id.strip() and pool:
+    if lookup_id and lookup_id.strip():
         needle = lookup_id.strip().lower()
 
-        def _pool_match(entry: dict) -> bool:
-            iid = str(entry["internal_id"]).lower()
-            mn  = str(entry["model_number"]).lower()
-            if iid == needle or mn == needle:
-                return True
-            # Burnaby DC variant: "99999_0" matches "99999"
-            if iid.startswith(needle + "_"):
-                return True
-            return False
+        def _matches(iid: str) -> bool:
+            iid = str(iid).lower()
+            # exact, or Burnaby DC row-indexed variant ("99999_0" matches "99999")
+            return iid == needle or iid.startswith(needle + "_")
 
-        matches = [e for e in pool if _pool_match(e)]
+        def _channel_rank(ch: str):
+            for iid, rnk in channel_hits.get(ch, {}).items():
+                if _matches(iid):
+                    return rnk
+            return None
 
-        if not matches:
-            st.error(f"**Not found** — `{lookup_id}` was not in the top-{len(pool)} RRF candidates for this query.")
+        d_rank  = _channel_rank("dense")
+        sm_rank = _channel_rank("sparse_model")
+        sd_rank = _channel_rank("sparse_desc")
+        pool_match = next((e for e in pool if _matches(e["internal_id"])), None)
+        retrieved_any = any(r is not None for r in (d_rank, sm_rank, sd_rank))
+        limits = PREFETCH_LIMITS.get(query_type, {})
+
+        # 1. Retrieved by the retrievers?
+        st.markdown("**1. Retrieved by the retrievers?**")
+        def _line(name, rnk, lim):
+            if lim == 0:
+                return f"- ⚪ **{name}** — not used for `{query_type}` queries"
+            if rnk is not None:
+                return f"- ✅ **{name}** — retrieved at rank #{rnk} (of top {lim})"
+            return f"- ⛔ **{name}** — not retrieved (outside top {lim})"
+        st.markdown(_line("Dense",          d_rank,  limits.get("dense", 0)))
+        st.markdown(_line("Sparse · model", sm_rank, limits.get("sparse_model", 0)))
+        st.markdown(_line("Sparse · desc",  sd_rank, limits.get("sparse_desc", 0)))
+
+        # 2. In the RRF pool?
+        st.markdown("**2. In the RRF candidate pool?**")
+        if pool_match:
+            st.markdown(
+                f"- ✅ Yes — RRF rank **#{pool_match['rrf_rank']}** of {len(pool)} "
+                f"(RRF score {pool_match['rrf_score']})"
+            )
         else:
-            for m in matches:
-                rrf_r    = m["rrf_rank"]
-                rerank_r = m["rerank_rank"] or "?"
-                pool_n   = len(pool)
-                ce       = m["reranker_score"]
-                rrf_s    = m["rrf_score"]
-                st.success(
-                    f"**Found!**  Internal ID: `{m['internal_id']}`  |  Model: `{m['model_number']}`  |  Source: `{m['source']}`\n\n"
-                    f"- **RRF pool**: rank **#{rrf_r}** / {pool_n}   (RRF score: {rrf_s})\n"
-                    f"- **After reranking**: rank **#{rerank_r}** / {pool_n}   (CE score: {ce:.4f})"
-                )
-                st.caption(m["description"])
+            st.markdown(f"- ⛔ No — did not make the top-{len(pool)} RRF pool")
 
-    elif lookup_id and lookup_id.strip() and not pool:
-        st.warning("Run a search first — the candidate pool is empty.")
+        # 3. Reranker rank?
+        st.markdown("**3. Reranker rank?**")
+        if pool_match and pool_match.get("rerank_rank"):
+            st.markdown(
+                f"- Final rank after reranking: **#{pool_match['rerank_rank']}** of {len(pool)} "
+                f"(CE score {pool_match['reranker_score']:.4f})"
+            )
+        else:
+            st.markdown("- — only RRF-pool candidates are reranked, so no reranker rank")
+
+        if pool_match:
+            st.caption(f"`{pool_match['source']}` · {pool_match['description']}")
+        elif not retrieved_any:
+            st.warning(
+                "Not surfaced by any retriever for this query, so it never entered the "
+                "RRF pool or the reranker. Either it's too dissimilar to the query, or "
+                "the ERP ID isn't in the index."
+            )
 
 
-# ---------------------------------------------------------------------------
-# Evals
-# ---------------------------------------------------------------------------
-
-_EVAL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_results.json")
-
-@st.cache_data(show_spinner=False)
-def _load_eval() -> dict:
-    """Load eval summary from eval_results.json (cached until file changes)."""
-    if not os.path.exists(_EVAL_PATH):
-        return {}
-    with open(_EVAL_PATH) as f:
-        return json.load(f).get("summary", {})
-
-def _row(s: dict, label_key: str, label_val: str) -> dict:
-    return {
-        label_key:  label_val,
-        "MRR@3":   s["MRR@3"],   "R@3":   s["Recall@3"],   "Miss@3":   s["Miss@3"],
-        "MRR@10":  s["MRR@10"],  "R@10":  s["Recall@10"],  "Miss@10":  s["Miss@10"],
-        "MRR@50":  s["MRR@50"],  "R@50":  s["Recall@50"],  "Miss@50":  s["Miss@50"],
-        "N": s["n"],
-    }
-
-st.divider()
-with st.expander("Evals", expanded=False):
-    ev = _load_eval()
-    if not ev:
-        st.warning("eval_results.json not found — run `python scripts/evaluate.py` to generate it.")
-        st.stop()
-
-    st.caption("90 queries across electrical, mechanical, and plumbing | Gemini classifier | hybrid dense + BM25 + RRF")
-
-    st.markdown("**Overall**")
-    ov = ev["overall"]
-    st.dataframe([
-        {"Metric": "MRR",    "@3": ov["MRR@3"],    "@10": ov["MRR@10"],    "@50": ov["MRR@50"]},
-        {"Metric": "Recall", "@3": ov["Recall@3"],  "@10": ov["Recall@10"],  "@50": ov["Recall@50"]},
-        {"Metric": "Miss",   "@3": ov["Miss@3"],    "@10": ov["Miss@10"],    "@50": ov["Miss@50"]},
-    ], hide_index=True, use_container_width=False)
-
-    st.markdown("**By domain**")
-    st.dataframe([
-        _row(ev["electrical"], "Domain", "Electrical"),
-        _row(ev["mechanical"], "Domain", "Mechanical"),
-        _row(ev["plumbing"],   "Domain", "Plumbing"),
-    ], hide_index=True, use_container_width=True)
-
-    st.markdown("**By query type**")
-    st.dataframe([
-        _row(ev["model_number"], "Query type", "Model number"),
-        _row(ev["technical"],    "Query type", "Technical"),
-        _row(ev["descriptive"],  "Query type", "Descriptive"),
-    ], hide_index=True, use_container_width=True)
-
-    st.markdown("**By domain × query type**")
-    domain_type_rows = []
-    for domain in ("electrical", "mechanical", "plumbing"):
-        for qtype in ("model_number", "technical", "descriptive"):
-            key = f"{domain}/{qtype}"
-            if key in ev:
-                r = _row(ev[key], "Type", qtype.replace("_", " ").title())
-                r["Domain"] = domain.title()
-                # reorder columns
-                domain_type_rows.append({k: r[k] for k in
-                    ["Domain", "Type", "MRR@3", "R@3", "Miss@3",
-                     "MRR@10", "R@10", "Miss@10", "MRR@50", "R@50", "Miss@50", "N"]})
-    st.dataframe(domain_type_rows, hide_index=True, use_container_width=True)

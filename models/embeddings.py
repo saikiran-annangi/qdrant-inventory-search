@@ -159,8 +159,9 @@ def encode_query(query: str) -> tuple:
     # Sparse: model-number field uses variant expansion
     model_text = model_number_variants(query) or query
 
-    # Sparse: description field uses spec normalization
-    desc_text = normalize_specs(query) or query
+    # Sparse: description field uses spec + dimension normalization. Metric
+    # bridging is query-side only (documents stay canonical at ingest).
+    desc_text = normalize_specs(query, bridge_metric=True) or query
 
     sm_result = list(bm25_model.embed([model_text]))[0]
     sd_result = list(bm25_model.embed([desc_text]))[0]
