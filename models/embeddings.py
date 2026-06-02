@@ -146,7 +146,7 @@ def encode_query(query: str) -> tuple:
         sparse_model_vec -- SparseVector, BM25 over model number variants
         sparse_desc_vec  -- SparseVector, BM25 over spec-normalized text
     """
-    from data.normalizers import model_number_variants, normalize_specs
+    from data.normalizers import model_number_variants, spec_text_with_attributes
 
     dense_model = get_dense_model()
     bm25_model  = get_bm25_model()
@@ -159,9 +159,10 @@ def encode_query(query: str) -> tuple:
     # Sparse: model-number field uses variant expansion
     model_text = model_number_variants(query) or query
 
-    # Sparse: description field uses spec + dimension normalization. Metric
+    # Sparse: description field uses spec + dimension normalization plus
+    # canonical attribute anchors (so lamp bases / NEMA classes match). Metric
     # bridging is query-side only (documents stay canonical at ingest).
-    desc_text = normalize_specs(query, bridge_metric=True) or query
+    desc_text = spec_text_with_attributes(query, bridge_metric=True) or query
 
     sm_result = list(bm25_model.embed([model_text]))[0]
     sd_result = list(bm25_model.embed([desc_text]))[0]

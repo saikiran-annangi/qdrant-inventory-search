@@ -24,7 +24,10 @@ from core.filters import build_filter
 from models.classifier import classify_query
 from models.embeddings import encode_query
 from models.reranker import rerank, rerank_with_scores
-from data.normalizers import size_anchor_tokens, doc_size_anchors
+from data.normalizers import (
+    size_anchor_tokens, doc_size_anchors, attribute_anchor_tokens,
+    attribute_relation,
+)
 
 # Dense vectors are int8-quantized (see scripts/ingest.py). Rescore re-scores the
 # quantized candidate pool against the on-disk float32 originals, recovering the
@@ -70,6 +73,37 @@ def apply_size_sort(query, hits, ce_scores):
 
     tier = {"match": 2, "none": 1, "conflict": 0}
     return sorted(hits, key=lambda h: (tier[_size_relation(h, want)], ce(h)), reverse=True)
+
+
+def apply_attribute_sort(query, hits):
+    """Re-order hits by the query's structured electrical attributes (pole,
+    amperage, voltage, trip curve, NEMA class, IP rating, lamp base,
+    tamper-resistant, knock-out).
+
+    The cross-encoder is attribute-blind, so for "GFCI 20A 125V" it can rank a
+    15A part above the 20A one, or surface the wrong lamp base. We sort by
+    (attribute matches desc, conflicts asc): a doc that contradicts a queried
+    attribute (states 15A when 20A was asked) sinks BELOW one that is merely
+    silent on it. Python's STABLE sort preserves the incoming order (already
+    size-sorted + CE-ordered) as the final tiebreaker. No-op when the query
+    states no recognised attribute, so it is safe to leave on for every
+    query/domain. Call AFTER apply_size_sort.
+    """
+    if not hits:
+        return hits
+    want = attribute_anchor_tokens(query)
+    if not want:
+        return hits
+
+    def key(h):
+        doc = attribute_anchor_tokens(
+            " ".join(str(h.payload.get(f) or "") for f in
+                     ("description", "extended_description", "product_category"))
+        )
+        matches, conflicts = attribute_relation(want, doc)
+        return (matches, -conflicts)
+
+    return sorted(hits, key=key, reverse=True)
 
 
 def search(
@@ -149,6 +183,7 @@ def search(
     if use_reranker and hits:
         hits, ce_scores = rerank_with_scores(query, hits)
         hits = apply_size_sort(query, hits, ce_scores)
+        hits = apply_attribute_sort(query, hits)
         hits = hits[:limit]
 
     return _format_results(hits, query_type)
@@ -277,6 +312,7 @@ def search_with_observability(
     if hits:
         hits, reranker_scores = rerank_with_scores(query, hits)
         hits = apply_size_sort(query, hits, reranker_scores)
+        hits = apply_attribute_sort(query, hits)
     # Record post-rerank position for every candidate
     rerank_rank_map = {str(h.id): i for i, h in enumerate(hits, 1)}
     display_hits = hits[:limit]
