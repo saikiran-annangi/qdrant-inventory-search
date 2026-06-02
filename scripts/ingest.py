@@ -29,6 +29,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import (
     PointStruct, SparseVector, VectorParams, Distance,
     SparseVectorParams, SparseIndexParams, HnswConfigDiff, PayloadSchemaType,
+    ScalarQuantization, ScalarQuantizationConfig, ScalarType,
 )
 from data.normalizers import normalize_specs, normalize_manufacturer, model_number_variants
 from models.embeddings import get_dense_model, get_bm25_model
@@ -379,8 +380,23 @@ def main():
         pass
     client.create_collection(
         collection_name=COL,
-        vectors_config={"dense": VectorParams(size=768, distance=Distance.COSINE,
-                        hnsw_config=HnswConfigDiff(m=16, ef_construct=200))},
+        # Dense vectors use int8 scalar quantization: the quantized copy is
+        # pinned in RAM (always_ram) while the original float32 vectors live on
+        # disk (on_disk=True). This is the cost lever -- it shrinks the in-RAM
+        # working set ~4x so the cluster can stay on a smaller RAM tier as the
+        # catalog scales. Rescore (enabled query-side in core/search.py) reads
+        # the on-disk originals to recover accuracy. Binary quantization is NOT
+        # used: mpnet is 768d, below the ~1024d threshold where binary holds up.
+        vectors_config={"dense": VectorParams(
+            size=768, distance=Distance.COSINE,
+            hnsw_config=HnswConfigDiff(m=16, ef_construct=200),
+            quantization_config=ScalarQuantization(
+                scalar=ScalarQuantizationConfig(
+                    type=ScalarType.INT8, quantile=0.99, always_ram=True,
+                )
+            ),
+            on_disk=True,
+        )},
         sparse_vectors_config={
             "sparse_model": SparseVectorParams(index=SparseIndexParams(on_disk=False)),
             "sparse_desc":  SparseVectorParams(index=SparseIndexParams(on_disk=False)),

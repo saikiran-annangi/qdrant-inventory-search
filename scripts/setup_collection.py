@@ -61,7 +61,10 @@ client.create_collection(
                     always_ram=True,
                 )
             ),
-            on_disk=False,
+            # Originals on disk + quantized copy in RAM: the configuration that
+            # actually reduces RAM (and therefore the Qdrant Cloud bill at scale).
+            # Kept in sync with the live schema in scripts/ingest.py.
+            on_disk=True,
         )
     },
     sparse_vectors_config={

@@ -14,7 +14,9 @@ from typing import List, Optional
 
 warnings.filterwarnings("ignore")
 
-from qdrant_client.models import Prefetch, FusionQuery, Fusion
+from qdrant_client.models import (
+    Prefetch, FusionQuery, Fusion, SearchParams, QuantizationSearchParams,
+)
 
 from config import PREFETCH_LIMITS, COLLECTION_NAME
 from core.client import get_client
@@ -23,6 +25,15 @@ from models.classifier import classify_query
 from models.embeddings import encode_query
 from models.reranker import rerank, rerank_with_scores
 from data.normalizers import size_anchor_tokens, doc_size_anchors
+
+# Dense vectors are int8-quantized (see scripts/ingest.py). Rescore re-scores the
+# quantized candidate pool against the on-disk float32 originals, recovering the
+# precision lost to quantization; oversampling widens that pool first (2x is
+# Qdrant's recommended sweet spot). Applied to dense reads ONLY -- the BM25
+# sparse channels are not quantized.
+_DENSE_QSP = SearchParams(
+    quantization=QuantizationSearchParams(rescore=True, oversampling=2.0)
+)
 
 
 def _size_relation(hit, want: set) -> str:
@@ -108,6 +119,7 @@ def search(
             using="dense",
             limit=limits["dense"],
             filter=qdrant_filter,
+            params=_DENSE_QSP,
         ))
     prefetch.append(Prefetch(
         query=sparse_model_vec,
@@ -198,6 +210,7 @@ def search_with_observability(
         dense_pts = client.query_points(
             COLLECTION_NAME, query=dense_vec, using="dense",
             limit=limits["dense"], with_payload=["internal_id"], query_filter=qdrant_filter,
+            search_params=_DENSE_QSP,
         ).points
     sm_pts = client.query_points(
         COLLECTION_NAME, query=sm_vec, using="sparse_model",
@@ -232,7 +245,7 @@ def search_with_observability(
     # RRF fusion — skip channels whose limit is 0
     prefetch = []
     if limits["dense"] > 0:
-        prefetch.append(Prefetch(query=dense_vec, using="dense",        limit=limits["dense"],        filter=qdrant_filter))
+        prefetch.append(Prefetch(query=dense_vec, using="dense",        limit=limits["dense"],        filter=qdrant_filter, params=_DENSE_QSP))
     prefetch.append(    Prefetch(query=sm_vec,    using="sparse_model", limit=limits["sparse_model"], filter=qdrant_filter))
     if limits["sparse_desc"] > 0:
         prefetch.append(Prefetch(query=sd_vec,    using="sparse_desc",  limit=limits["sparse_desc"],  filter=qdrant_filter))
