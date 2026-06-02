@@ -28,6 +28,7 @@ User query
   Classify   Gemini 2.5 Flash (model_number / technical / descriptive)
   Encode     three vectors per query: dense, sparse_model, sparse_desc
   Retrieve   three parallel prefetches with per-type weighted limits
+             (dense channel: int8-quantized + rescored against on-disk originals)
   Fuse       reciprocal rank fusion, server-side
   Rerank     cross-encoder on top 50
   Sort       size-aware reordering for queries with size tokens
@@ -42,10 +43,24 @@ Architecture diagram: [`presentation/architecture.png`](presentation/architectur
 | ------------------ | ----------------------------------------- |
 | Vector database    | Qdrant Cloud                              |
 | Dense embeddings   | sentence-transformers/all-mpnet-base-v2   |
+| Dense quantization | int8 scalar, originals on disk + rescore  |
 | Sparse vectors    | FastEmbed BM25 (two fields)               |
 | Query classifier   | Gemini 2.5 Flash via OpenRouter           |
 | Reranker           | cross-encoder/ms-marco-MiniLM-L-6-v2      |
 | UI                 | Streamlit                                 |
+
+### Dense vector quantization
+
+The dense (mpnet) vectors are stored with int8 scalar quantization: the
+quantized copy is pinned in RAM (`always_ram`) while the original float32
+vectors live on disk (`on_disk`). This shrinks the in-RAM working set ~4x so
+the cluster stays on a smaller RAM tier as the catalog grows — the main lever
+on Qdrant Cloud cost at scale. At query time the dense channel rescores its
+candidate pool against the on-disk originals (`rescore`, `oversampling=2.0`) to
+recover the precision lost to quantization. Measured impact on the 300-query
+eval: Recall@{5,10,50} unchanged, MRR within +0.001. Binary quantization is
+deliberately not used — at 768 dimensions it degrades recall (Qdrant recommends
+it only for ~1024d+). The BM25 sparse channels are not quantized.
 
 ## Quick start
 
