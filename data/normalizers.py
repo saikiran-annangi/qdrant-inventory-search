@@ -209,6 +209,23 @@ def normalize_specs(text: str, bridge_metric: bool = False) -> str:
     return re.sub(r"\s+", " ", result).strip()
 
 
+def spec_text_with_attributes(text: str, bridge_metric: bool = False) -> str:
+    """normalize_specs() output plus canonical attribute anchor tokens, for the
+    BM25 sparse_desc field.
+
+    Applied symmetrically at ingest and query time. Lamp bases (G24Q-3), NEMA
+    classes (4/1) and similar attributes contain punctuation that BM25 shatters
+    into useless fragments ("g24q", "3"); emitting the clean canonical anchor
+    (baseg24q3, nema4_1) as an extra term makes them reliably matchable so the
+    attribute can drive *retrieval*, not only the post-rerank ordering.
+    """
+    base = normalize_specs(text, bridge_metric=bridge_metric)
+    attrs = attribute_anchor_tokens(text)
+    if attrs:
+        base = (base + " " + " ".join(sorted(attrs))).strip()
+    return base
+
+
 def size_anchor_tokens(query: str, bridge_metric: bool = False) -> set:
     """Canonical sizeNNN/mmNNN anchors a query is asking for (size-aware rerank)."""
     return set(_ANCHOR_RE.findall(normalize_specs(query, bridge_metric=bridge_metric)))
@@ -217,6 +234,114 @@ def size_anchor_tokens(query: str, bridge_metric: bool = False) -> set:
 def doc_size_anchors(text: str) -> set:
     """Canonical size anchors present in a document's text (no metric bridging)."""
     return set(_ANCHOR_RE.findall(normalize_specs(text or "")))
+
+
+# ---------------------------------------------------------------------------
+# Structured electrical attribute anchors (for attribute-aware reranking)
+# ---------------------------------------------------------------------------
+# The cross-encoder is attribute-blind: given "GFCI 20A 125V" it happily ranks a
+# 15A part above the 20A one, or the wrong lamp base / NEMA class at the top.
+# We collapse the discriminating electrical attributes a query/doc states into
+# punctuation-free canonical tokens (amp20, volt125, pole3, curvec, nema4x,
+# baseg24q3, ip66, tamperresistant, knockout) and let the reranker re-tier by
+# how many of the QUERY's attributes a candidate matches. Applied identically to
+# query and document text; high precision by design (a pattern only fires on an
+# explicit attribute), so it is a no-op for queries that state none.
+
+def _attr_num(s: str) -> str:
+    """'20' / '20.0' -> '20', '16.5' -> '16.5' (stable, punctuation-free)."""
+    try:
+        return f"{float(s):g}"
+    except ValueError:
+        return s
+
+_ATTR_PATTERNS = [
+    # poles: "3P", "3 POLE", "3-POLE" -> pole3
+    (re.compile(r"\b([123])\s*-?\s*P(?:OLE)?\b", re.I),         lambda m: f"pole{m.group(1)}"),
+    # amperage: "20A", "20 AMP" -> amp20
+    (re.compile(r"\b(\d+\.?\d*)\s*A(?:MP|MPS|MPERE)?\b", re.I), lambda m: f"amp{_attr_num(m.group(1))}"),
+    # voltage: "125V", "230 VOLT" -> volt125
+    (re.compile(r"\b(\d+\.?\d*)\s*V(?:OLT|OLTS)?\b", re.I),     lambda m: f"volt{_attr_num(m.group(1))}"),
+    # trip curve: "C CURVE", "C-CURVE" -> curvec
+    (re.compile(r"\b([BCD])\s*-?\s*CURVE\b", re.I),             lambda m: f"curve{m.group(1).lower()}"),
+    # enclosure class: "NEMA 4X", "NEMA 4/1" -> nema4x / nema4_1
+    (re.compile(r"\bNEMA\s*([0-9]+[A-Z]?(?:/[0-9]+)?)\b", re.I), lambda m: f"nema{m.group(1).lower().replace('/', '_')}"),
+    # ingress protection: "IP66" -> ip66
+    (re.compile(r"\bIP\s*([0-9]{2})\b", re.I),                  lambda m: f"ip{m.group(1)}"),
+    # lamp / socket base: "BASE G24Q-3", standalone "E26" -> baseg24q3 / basee26
+    (re.compile(r"\b(E12|E26|E27|E39|G13|GU10|GU24|G24Q-?[0-9]|GX24Q-?[0-9]|B17)\b", re.I),
+                                                                lambda m: f"base{m.group(1).lower().replace('-', '')}"),
+    (re.compile(r"\bTAMPER\s*-?\s*RESIST", re.I),               lambda m: "tamperresistant"),
+    (re.compile(r"\bKNOCK\s*-?\s*OUT\b", re.I),                 lambda m: "knockout"),
+]
+
+
+def attribute_anchor_tokens(text: str) -> set:
+    """Canonical structured-attribute tokens stated in the text (query or doc).
+
+    Symmetric for queries and documents. Returns an empty set when the text
+    states no recognised attribute, which makes attribute-aware reranking a
+    safe no-op for such queries.
+    """
+    if not text:
+        return set()
+    out = set()
+    for pat, fmt in _ATTR_PATTERNS:
+        for m in pat.finditer(text):
+            out.add(fmt(m))
+    return out
+
+
+def doc_attribute_anchors(text: str) -> set:
+    """Alias of attribute_anchor_tokens for the document side (readability)."""
+    return attribute_anchor_tokens(text)
+
+
+# Attribute "families" — tokens sharing a prefix describe the same physical
+# attribute (amp16/amp20 are competing amperages). Grouping by family lets us
+# tell a genuine CONFLICT (doc states a *different* value in a family the query
+# cares about) from mere silence. Boolean flags (tamperresistant, knockout) are
+# their own family: present = match, absent = silent (never a conflict, since a
+# terse description may simply omit the feature).
+_ATTR_FAMILIES = ("amp", "volt", "pole", "curve", "nema", "ip", "base")
+
+
+def _attr_family(token: str) -> str:
+    for fam in _ATTR_FAMILIES:
+        if token.startswith(fam):
+            return fam
+    return token
+
+
+def attribute_relation(want: set, doc: set) -> tuple:
+    """Return (matches, conflicts) between a query's and a doc's attribute tokens,
+    counted per family.
+
+    For each attribute family the QUERY states:
+      match    -- the doc shares a value in that family
+      conflict -- the doc states a *different* value in that family
+      silent   -- the doc says nothing about that family (ignored)
+
+    Used to rank by (matches desc, conflicts asc): a doc that contradicts a
+    queried attribute sinks below one that is merely silent on it.
+    """
+    if not want:
+        return (0, 0)
+    wf, df = {}, {}
+    for t in want:
+        wf.setdefault(_attr_family(t), set()).add(t)
+    for t in doc:
+        df.setdefault(_attr_family(t), set()).add(t)
+    matches = conflicts = 0
+    for fam, wvals in wf.items():
+        dvals = df.get(fam)
+        if not dvals:
+            continue
+        if wvals & dvals:
+            matches += 1
+        else:
+            conflicts += 1
+    return matches, conflicts
 
 
 def model_number_variants(model: str) -> str:

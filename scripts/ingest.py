@@ -31,7 +31,10 @@ from qdrant_client.models import (
     SparseVectorParams, SparseIndexParams, HnswConfigDiff, PayloadSchemaType,
     ScalarQuantization, ScalarQuantizationConfig, ScalarType,
 )
-from data.normalizers import normalize_specs, normalize_manufacturer, model_number_variants
+from data.normalizers import (
+    normalize_specs, normalize_manufacturer, model_number_variants,
+    spec_text_with_attributes,
+)
 from models.embeddings import get_dense_model, get_bm25_model
 
 # Source CSV/XLSX path: $INVENTORY_DATA env override, else repo-root/inventory_data/
@@ -346,7 +349,7 @@ def main():
         dense_texts.append(d or r["internal_id"])
         sm = model_number_variants(r["model_number"]) or r["model_number"] or r["internal_id"]
         sm_texts.append(sm)
-        sd = normalize_specs(" ".join(x for x in [r.get("description") or "", r.get("manufacturer_name") or "",
+        sd = spec_text_with_attributes(" ".join(x for x in [r.get("description") or "", r.get("manufacturer_name") or "",
                                                     r.get("product_category") or ""] if x))
         sd_texts.append(sd or r.get("description") or r["internal_id"])
 

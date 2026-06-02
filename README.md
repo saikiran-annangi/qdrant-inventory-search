@@ -31,9 +31,17 @@ User query
              (dense channel: int8-quantized + rescored against on-disk originals)
   Fuse       reciprocal rank fusion, server-side
   Rerank     cross-encoder on top 50
-  Sort       size-aware reordering for queries with size tokens
+  Sort       size-aware, then electrical-attribute-aware reordering
 Top 10 results
 ```
+
+The `sparse_desc` field is augmented at ingest and query time with canonical
+attribute anchors (lamp base, NEMA class, pole, amperage, voltage, trip curve,
+IP rating) so punctuation-heavy attributes BM25 would otherwise shatter become
+matchable. After the cross-encoder, a deterministic attribute-aware pass
+re-tiers results by how many of the query's stated electrical attributes each
+candidate matches, demoting candidates that contradict a queried attribute. It
+is a no-op for queries that state no such attribute.
 
 Architecture diagram: [`presentation/architecture.png`](presentation/architecture.png).
 

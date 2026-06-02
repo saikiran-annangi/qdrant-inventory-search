@@ -15,6 +15,8 @@ eval_results_*.json
 eval2_results*.json
 scripts/eval_results.json
 scripts/v3_openrouter_results.json
+# Locally-generated eval slices (derived from mep_eval_300_v3.csv for fast iteration)
+scripts/eval_electrical.csv
 
 # Scratch / lab directory and outputs (kept on lab-archive-* branch, not on main)
 lab/
