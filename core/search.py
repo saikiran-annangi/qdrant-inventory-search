@@ -18,7 +18,7 @@ from qdrant_client.models import (
     Prefetch, FusionQuery, Fusion, SearchParams, QuantizationSearchParams,
 )
 
-from config import PREFETCH_LIMITS, COLLECTION_NAME
+from config import PREFETCH_LIMITS, COLLECTION_NAME, USE_CLASSIFIER, DEFAULT_PROFILE
 from core.client import get_client
 from core.filters import build_filter
 from models.classifier import classify_query
@@ -140,7 +140,7 @@ def search(
     client = get_client()
 
     if query_type is None:
-        query_type = classify_query(query)
+        query_type = classify_query(query) if USE_CLASSIFIER else DEFAULT_PROFILE
 
     limits = PREFETCH_LIMITS[query_type]
     dense_vec, sparse_model_vec, sparse_desc_vec = encode_query(query)
@@ -224,7 +224,7 @@ def search_with_observability(
     timings = {}
 
     t0 = time.perf_counter()
-    query_type = classify_query(query)
+    query_type = classify_query(query) if USE_CLASSIFIER else DEFAULT_PROFILE
     timings["classify_ms"] = round((time.perf_counter() - t0) * 1000, 1)
 
     t0 = time.perf_counter()

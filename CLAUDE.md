@@ -25,7 +25,7 @@ Installing deps: the machine's global pip points at an expired Parspec CodeArtif
 
 ## Required environment (`.env`)
 
-- `OPENROUTER_API_KEY` — **hard requirement**. `models/classifier.py` raises `EnvironmentError` without it; there is no fallback path.
+- `OPENROUTER_API_KEY` — only needed when `config.USE_CLASSIFIER=True` (the classifier is off by default, so the pipeline runs without it). When enabled, `models/classifier.py` raises `EnvironmentError` if the key is missing.
 - `QDRANT_URL` + `QDRANT_API_KEY` — for Qdrant Cloud.
 - `QDRANT_LOCAL_PATH` — dev override for an embedded file-based store (see backend-selection gotcha below).
 
@@ -33,7 +33,7 @@ Installing deps: the machine's global pip points at an expired Parspec CodeArtif
 
 ### Search pipeline (`core/search.py`)
 Every query flows through five stages:
-1. **Classify** (`models/classifier.py`) — Gemini 2.5 Flash via OpenRouter returns exactly one of `model_number` / `technical` / `descriptive`. In-process cached. An unexpected token raises.
+1. **Classify** (`models/classifier.py`) — **optional, off by default** (`config.USE_CLASSIFIER=False`). When enabled, Gemini 2.5 Flash via OpenRouter returns one of `model_number` / `technical` / `descriptive` to pick a prefetch profile. When disabled (default), every query uses the single `DEFAULT_PROFILE` ("default" = `{dense:50, sparse_model:50, sparse_desc:40}`) — an A/B across two held-out 300-query sets showed this matches/beats per-type routing while removing ~600ms latency and the OpenRouter dependency.
 2. **Encode** (`models/embeddings.py` → `encode_query`) — produces **three** vectors per query: a dense mpnet embedding, a BM25 `sparse_model` vector (over model-number variants), and a BM25 `sparse_desc` vector (over spec-normalized text).
 3. **Retrieve** — three parallel Qdrant prefetches. The classified `query_type` selects per-channel limits from `config.py:PREFETCH_LIMITS`. Note `model_number` queries set `sparse_desc` limit to 0 (siblings in a family share descriptions and would pollute rank 1); channels with limit 0 are skipped entirely.
 4. **Fuse** — server-side Reciprocal Rank Fusion (`FusionQuery(Fusion.RRF)`).

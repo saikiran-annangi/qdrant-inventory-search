@@ -25,7 +25,9 @@ By query type:
 
 ```
 User query
-  Classify   Gemini 2.5 Flash (model_number / technical / descriptive)
+  Classify   OPTIONAL, off by default (config.USE_CLASSIFIER). When on,
+             Gemini 2.5 Flash picks a per-type prefetch profile; when off
+             every query uses a single fixed profile (DEFAULT_PROFILE)
   Encode     three vectors per query: dense, sparse_model, sparse_desc
   Retrieve   three parallel prefetches with per-type weighted limits
              (dense channel: int8-quantized + rescored against on-disk originals)
@@ -53,7 +55,7 @@ Architecture diagram: [`presentation/architecture.png`](presentation/architectur
 | Dense embeddings   | sentence-transformers/all-mpnet-base-v2   |
 | Dense quantization | int8 scalar, originals on disk + rescore  |
 | Sparse vectors    | FastEmbed BM25 (two fields)               |
-| Query classifier   | Gemini 2.5 Flash via OpenRouter           |
+| Query classifier   | Gemini 2.5 Flash via OpenRouter (optional, off by default) |
 | Reranker           | cross-encoder/ms-marco-MiniLM-L-6-v2      |
 | UI                 | Streamlit                                 |
 

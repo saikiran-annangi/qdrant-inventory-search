@@ -55,7 +55,23 @@ PREFETCH_LIMITS = {
     "model_number": {"dense": 10, "sparse_model": 80, "sparse_desc": 0},
     "technical":    {"dense": 50, "sparse_model": 50, "sparse_desc": 40},
     "descriptive":  {"dense": 20, "sparse_model": 50, "sparse_desc": 80},
+    # Single fixed profile used when the classifier is bypassed (see below).
+    # Balanced across all three channels with enough depth that the type of the
+    # query stops mattering.
+    "default":      {"dense": 50, "sparse_model": 50, "sparse_desc": 40},
 }
+
+# ---------------------------------------------------------------------------
+# Query classification
+# ---------------------------------------------------------------------------
+# The Gemini query classifier picks a per-type prefetch profile. A/B across two
+# held-out 300-query eval sets showed that bypassing it and using a single fixed
+# profile (DEFAULT_PROFILE) matches or beats per-type routing on overall recall
+# (+2-3 pts R@10/R@50, no R@50 regression in any domain) while removing ~600ms
+# latency and the hard OpenRouter dependency (the pipeline otherwise raises if
+# OpenRouter is unreachable). Set USE_CLASSIFIER=True to restore classification.
+USE_CLASSIFIER = False
+DEFAULT_PROFILE = "default"
 
 # ---------------------------------------------------------------------------
 # Ingestion

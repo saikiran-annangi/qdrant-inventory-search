@@ -33,6 +33,7 @@ from core.search import search
 from models.embeddings import get_dense_model, get_bm25_model
 from models.reranker import get_reranker
 from models.classifier import classify_query
+from config import USE_CLASSIFIER, DEFAULT_PROFILE
 
 # 1. Load CSV
 with open(CSV_PATH, newline="", encoding="utf-8") as f:
@@ -61,35 +62,41 @@ print(f"ID compatibility: {match_iid}/{len(queries)} match internal_id verbatim"
 
 # 3. Warm models
 get_dense_model(); get_bm25_model(); get_reranker()
-if not os.getenv("OPENROUTER_API_KEY"):
-    raise SystemExit("OPENROUTER_API_KEY not set — aborting before issuing calls.")
 
-# 4. Classify ALL queries first (so we get a single batch of API calls,
-#    and progress is visible), then retrieve.
-print("\nClassifying via OpenRouter Gemini 2.5 Flash...")
-predicted_types = []
-t0 = time.time()
-for i, q in enumerate(queries, 1):
-    try:
-        pred = classify_query(q["query"])
-    except Exception as e:
-        print(f"  [warn] q{i} classify failed: {e}")
-        pred = "descriptive"  # neutral fallback
-    predicted_types.append(pred)
-    if i % 30 == 0 or i == len(queries):
-        rate = i / (time.time() - t0)
-        print(f"  {i}/{len(queries)} classified  ({rate:.1f} q/s, {time.time()-t0:.0f}s)", flush=True)
+# 4. Pick a prefetch profile per query. When the classifier is disabled
+#    (config.USE_CLASSIFIER=False, the production default) every query uses the
+#    single DEFAULT_PROFILE -- no OpenRouter calls -- matching the live pipeline.
+if USE_CLASSIFIER:
+    if not os.getenv("OPENROUTER_API_KEY"):
+        raise SystemExit("OPENROUTER_API_KEY not set — aborting before issuing calls.")
+    print("\nClassifying via OpenRouter Gemini 2.5 Flash...")
+    predicted_types = []
+    t0 = time.time()
+    for i, q in enumerate(queries, 1):
+        try:
+            pred = classify_query(q["query"])
+        except Exception as e:
+            print(f"  [warn] q{i} classify failed: {e}")
+            pred = "descriptive"  # neutral fallback
+        predicted_types.append(pred)
+        if i % 30 == 0 or i == len(queries):
+            rate = i / (time.time() - t0)
+            print(f"  {i}/{len(queries)} classified  ({rate:.1f} q/s, {time.time()-t0:.0f}s)", flush=True)
 
-# Classifier agreement (vs eval's ground-truth)
-agreement = sum(1 for q, p in zip(queries, predicted_types) if q["type"] == p)
-print(f"\nClassifier agreement with eval CSV's query_type: {agreement}/{len(queries)} ({100*agreement/len(queries):.1f}%)")
-confusion = collections.Counter()
-for q, p in zip(queries, predicted_types):
-    confusion[(q["type"], p)] += 1
-print("Confusion (truth -> pred):")
-for (t, p), n in sorted(confusion.items()):
-    mark = " <- mismatch" if t != p else ""
-    print(f"  {t:>12} -> {p:<12} {n:>4}{mark}")
+    # Classifier agreement (vs eval's ground-truth)
+    agreement = sum(1 for q, p in zip(queries, predicted_types) if q["type"] == p)
+    print(f"\nClassifier agreement with eval CSV's query_type: {agreement}/{len(queries)} ({100*agreement/len(queries):.1f}%)")
+    confusion = collections.Counter()
+    for q, p in zip(queries, predicted_types):
+        confusion[(q["type"], p)] += 1
+    print("Confusion (truth -> pred):")
+    for (t, p), n in sorted(confusion.items()):
+        mark = " <- mismatch" if t != p else ""
+        print(f"  {t:>12} -> {p:<12} {n:>4}{mark}")
+else:
+    print(f"\nClassifier disabled — using fixed '{DEFAULT_PROFILE}' profile for all queries.")
+    predicted_types = [DEFAULT_PROFILE] * len(queries)
+    agreement = 0
 
 # 5. Retrieve with the classifier-predicted type
 print("\nRetrieving...")
