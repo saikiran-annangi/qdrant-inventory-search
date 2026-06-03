@@ -5,12 +5,10 @@ Functions:
   normalize_manufacturer  -- canonicalize manufacturer names via alias table
   normalize_specs         -- expand unit abbreviations for BM25 matching
   model_number_variants   -- produce casing/separator variants of a model number
-  make_id                 -- deterministic MD5 UUID from (source, internal_id)
   is_sparse_description   -- detect null or very short descriptions
 """
 
 import re
-import hashlib
 import logging
 
 import pandas as pd
@@ -367,15 +365,6 @@ def model_number_variants(model: str) -> str:
     return " ".join(variants)
 
 
-def make_id(source: str, internal_id: str) -> str:
-    """
-    Deterministic UUID from (source, internal_id).
-
-    Using MD5 ensures the same product always maps to the same Qdrant point ID,
-    making ingestion idempotent via upsert.
-    """
-    raw = f"{source}:{internal_id}"
-    return hashlib.md5(raw.encode()).hexdigest()
 
 
 def is_sparse_description(desc) -> bool:
