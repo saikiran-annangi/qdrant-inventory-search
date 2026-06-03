@@ -10,6 +10,11 @@ inventory_data/*
 !inventory_data/.gitkeep
 inventory data/
 
+# Generated cache files (rebuild with scripts/ — too large and machine-specific for git)
+enrichment_cache.json
+taxonomy_cache.json
+taxonomy_embeddings.json
+
 # Per-run eval output (large per-query logs; scripts overwrite eval_results.json at repo root)
 eval_results_*.json
 eval2_results*.json

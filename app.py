@@ -1,5 +1,5 @@
 """
-Inventory Search -- Streamlit UI
+Inventory Search — Streamlit UI
 
 Run:
     streamlit run app.py
@@ -12,7 +12,6 @@ import warnings
 warnings.filterwarnings("ignore")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Ensure the repo root is in sys.path when Streamlit changes cwd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import json
@@ -61,6 +60,8 @@ st.markdown("""
     .stock-in  { color: #2e7d32; font-weight: 600; font-size: 0.82rem; }
     .stock-out { color: #c62828; font-weight: 600; font-size: 0.82rem; }
     .stock-unk { color: #9e9e9e; font-size: 0.82rem; }
+    .tax-badge { font-size: 0.75rem; color: #5c6bc0; background: #e8eaf6;
+                 padding: 2px 6px; border-radius: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,6 +88,19 @@ def stock_label(has_stock) -> str:
     if has_stock is False:
         return '<span class="stock-out">Out of Stock</span>'
     return '<span class="stock-unk">Unknown</span>'
+
+
+def taxonomy_label(taxonomy_result: dict) -> str:
+    if not taxonomy_result:
+        return "—"
+    domain  = taxonomy_result.get("taxonomy_domain",      "") or ""
+    cat     = taxonomy_result.get("taxonomy_category",    "") or ""
+    subcat  = taxonomy_result.get("taxonomy_subcategory", "") or ""
+    if subcat:
+        return f"{domain} › {cat} › {subcat}"
+    if cat:
+        return f"{domain} › {cat}"
+    return domain or "—"
 
 
 # ---------------------------------------------------------------------------
@@ -125,32 +139,31 @@ with col_btn:
 if not query or not query.strip():
     st.stop()
 
-# Re-run the search only when the button is clicked or the query/filter changed.
-# On any other rerun (e.g. ERP ID box, expander toggle) we render from session state.
 _cache_key = (query.strip(), source_filter)
 if search_clicked or st.session_state.get("_search_key") != _cache_key:
     st.session_state["_search_key"] = _cache_key
-    # Clear the ERP ID lookup so a stale ID from the previous search
-    # is not immediately evaluated against the new query's candidate pool.
-    st.session_state["erp_lookup"] = ""
+    st.session_state["erp_lookup"]  = ""
     with st.spinner("Searching..."):
         _r = search_with_observability(query.strip(), source_filter=source_filter)
+    # search_with_observability returns 7 values:
+    # results, query_type, taxonomy_result, timings, retriever_counts, full_pool, channel_hits
     st.session_state["_search_results"]  = _r[0]
     st.session_state["_query_type"]      = _r[1]
-    st.session_state["_timings"]         = _r[2]
-    st.session_state["_ret_counts"]      = _r[3]
-    st.session_state["_full_pool"]       = _r[4]
-    st.session_state["_channel_hits"]    = _r[5]
+    st.session_state["_taxonomy"]        = _r[2]
+    st.session_state["_timings"]         = _r[3]
+    st.session_state["_ret_counts"]      = _r[4]
+    st.session_state["_full_pool"]       = _r[5]
+    st.session_state["_channel_hits"]    = _r[6]
 
-# Always render from session state — safe across any rerun
 if "_search_results" not in st.session_state:
     st.stop()
 
-results    = st.session_state["_search_results"]
-query_type = st.session_state["_query_type"]
-timings    = st.session_state["_timings"]
-ret_counts = st.session_state["_ret_counts"]
-full_pool  = st.session_state["_full_pool"]
+results         = st.session_state["_search_results"]
+query_type      = st.session_state["_query_type"]
+taxonomy_result = st.session_state.get("_taxonomy", {})
+timings         = st.session_state["_timings"]
+ret_counts      = st.session_state["_ret_counts"]
+full_pool       = st.session_state["_full_pool"]
 
 # ---------------------------------------------------------------------------
 # Pipeline observability
@@ -159,16 +172,24 @@ full_pool  = st.session_state["_full_pool"]
 st.divider()
 st.markdown("**Pipeline**")
 
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("Query type", query_type.replace("_", " ").title())
-c2.metric("Classify",   f"{timings['classify_ms']} ms")
+c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+c1.metric("Query type",  query_type.replace("_", " ").title())
+c2.metric("Classify",    f"{timings['classify_ms']} ms")
 with c2:
     with st.popover("View prompt", use_container_width=False):
         st.code(CLASSIFY_PROMPT.format(query=query.strip()), language=None)
-c3.metric("Encode",   f"{timings['encode_ms']} ms")
-c4.metric("Retrieve", f"{timings['retrieve_ms']} ms")
-c5.metric("Rerank",   f"{timings['rerank_ms']} ms")
-c6.metric("Total",    f"{timings['total_ms']} ms")
+c3.metric("Taxonomy",   f"{timings.get('taxonomy_ms', 0)} ms",
+          help=taxonomy_label(taxonomy_result))
+c4.metric("Encode",     f"{timings['encode_ms']} ms")
+c5.metric("Retrieve",   f"{timings['retrieve_ms']} ms")
+c6.metric("Rerank",     f"{timings['rerank_ms']} ms")
+c7.metric("Total",      f"{timings['total_ms']} ms")
+
+if taxonomy_result and taxonomy_result.get("taxonomy_domain"):
+    st.caption(
+        f"Taxonomy prediction: **{taxonomy_label(taxonomy_result)}** "
+        f"— items matching this subcategory received a +0.8 score boost after reranking."
+    )
 
 pool = ret_counts["rrf_pool_size"]
 st.markdown(
@@ -176,9 +197,12 @@ st.markdown(
     f"{pool}-candidate RRF pool (can overlap)"
 )
 rc1, rc2, rc3 = st.columns(3)
-rc1.metric("Dense",          ret_counts["dense"],        help="Candidates from semantic embedding retriever")
-rc2.metric("Sparse (model)", ret_counts["sparse_model"], help="Candidates from BM25 over model number variants")
-rc3.metric("Sparse (desc)",  ret_counts["sparse_desc"],  help="Candidates from BM25 over description and specs")
+rc1.metric("Dense",          ret_counts["dense"],
+           help="Candidates from semantic embedding retriever")
+rc2.metric("Sparse (model)", ret_counts["sparse_model"],
+           help="Candidates from BM25 over model number variants")
+rc3.metric("Sparse (desc)",  ret_counts["sparse_desc"],
+           help="Candidates from BM25 over description and specs")
 
 # ---------------------------------------------------------------------------
 # Results
@@ -201,9 +225,11 @@ for r in results:
         with left:
             st.markdown("**Description**")
             st.write(r["description"])
+            st.markdown("**Extended Description**")
             if r.get("extended_description"):
-                st.markdown("**Extended Description**")
                 st.write(r["extended_description"])
+            else:
+                st.caption("—")
             st.markdown(
                 f'<span class="meta">'
                 f'Category: {r["product_category"]}&nbsp;&nbsp;|&nbsp;&nbsp;'
@@ -231,17 +257,17 @@ for r in results:
         rc1.metric(
             "Dense",
             f"{r['dense_score']:.3f}" if r["dense_score"] is not None else "—",
-            help="Cosine similarity from the dense retriever. '—' means this doc was not in the dense candidate pool.",
+            help="Cosine similarity from the dense retriever.",
         )
         rc2.metric(
             "BM25 model",
             f"{r['sparse_model_score']:.3f}" if r["sparse_model_score"] is not None else "—",
-            help="BM25 score from the model-number retriever. '—' means this doc was not in the BM25-model candidate pool.",
+            help="BM25 score from the model-number retriever.",
         )
         rc3.metric(
             "BM25 desc",
             f"{r['sparse_desc_score']:.3f}" if r["sparse_desc_score"] is not None else "—",
-            help="BM25 score from the description retriever. '—' means this doc was not in the BM25-desc candidate pool (or desc channel is disabled for this query type).",
+            help="BM25 score from the description retriever.",
         )
         rc4.metric(
             "RRF fusion",
@@ -251,7 +277,7 @@ for r in results:
         rc5.metric(
             "Reranker",
             f"{r['reranker_score']:.4f}",
-            help="Cross-encoder score (ms-marco-MiniLM-L-6-v2). Raw logit — typically [-5, +10], higher = better match.",
+            help="Cross-encoder score (ms-marco-MiniLM-L-6-v2). Raw logit; higher = better match.",
         )
         st.caption(f"Retrieved by: **{r['retrieval_path']}**")
 
@@ -277,11 +303,18 @@ for r in results:
         with st.expander("Raw Qdrant document (as stored)", expanded=False):
             st.markdown(
                 f'<span class="meta">Qdrant point ID: <code>{r["id"]}</code> &nbsp;|&nbsp; '
-                f'Vectors: dense (768d cosine) &nbsp;·&nbsp; sparse_model (BM25) '
-                f'&nbsp;·&nbsp; sparse_desc (BM25)</span>',
+                f'Vectors: dense (768d cosine, int8-quantized) &nbsp;·&nbsp; '
+                f'sparse_model (BM25) &nbsp;·&nbsp; sparse_desc (BM25)</span>',
                 unsafe_allow_html=True,
             )
-            st.json(r["raw_payload"])
+            # Reorder so extended_description appears right after description
+            _p = r["raw_payload"]
+            _ordered = {}
+            for k, v in _p.items():
+                _ordered[k] = v
+                if k == "description":
+                    _ordered["extended_description"] = _p.get("extended_description")
+            st.json(_ordered)
 
 # ---------------------------------------------------------------------------
 # ERP ID lookup — trace one ERP ID through this query's pipeline
@@ -309,7 +342,6 @@ with st.expander("ERP ID lookup", expanded=False):
 
         def _matches(iid: str) -> bool:
             iid = str(iid).lower()
-            # exact, or Burnaby DC row-indexed variant ("99999_0" matches "99999")
             return iid == needle or iid.startswith(needle + "_")
 
         def _channel_rank(ch: str):
@@ -321,11 +353,10 @@ with st.expander("ERP ID lookup", expanded=False):
         d_rank  = _channel_rank("dense")
         sm_rank = _channel_rank("sparse_model")
         sd_rank = _channel_rank("sparse_desc")
-        pool_match = next((e for e in pool if _matches(e["internal_id"])), None)
+        pool_match    = next((e for e in pool if _matches(e["internal_id"])), None)
         retrieved_any = any(r is not None for r in (d_rank, sm_rank, sd_rank))
-        limits = PREFETCH_LIMITS.get(query_type, {})
+        limits        = PREFETCH_LIMITS.get(query_type, {})
 
-        # 1. Retrieved by the retrievers?
         st.markdown("**1. Retrieved by the retrievers?**")
         def _line(name, rnk, lim):
             if lim == 0:
@@ -337,7 +368,6 @@ with st.expander("ERP ID lookup", expanded=False):
         st.markdown(_line("Sparse · model", sm_rank, limits.get("sparse_model", 0)))
         st.markdown(_line("Sparse · desc",  sd_rank, limits.get("sparse_desc", 0)))
 
-        # 2. In the RRF pool?
         st.markdown("**2. In the RRF candidate pool?**")
         if pool_match:
             st.markdown(
@@ -347,7 +377,6 @@ with st.expander("ERP ID lookup", expanded=False):
         else:
             st.markdown(f"- ⛔ No — did not make the top-{len(pool)} RRF pool")
 
-        # 3. Reranker rank?
         st.markdown("**3. Reranker rank?**")
         if pool_match and pool_match.get("rerank_rank"):
             st.markdown(
@@ -355,15 +384,12 @@ with st.expander("ERP ID lookup", expanded=False):
                 f"(CE score {pool_match['reranker_score']:.4f})"
             )
         else:
-            st.markdown("- — only RRF-pool candidates are reranked, so no reranker rank")
+            st.markdown("- — only RRF-pool candidates are reranked")
 
         if pool_match:
             st.caption(f"`{pool_match['source']}` · {pool_match['description']}")
         elif not retrieved_any:
             st.warning(
-                "Not surfaced by any retriever for this query, so it never entered the "
-                "RRF pool or the reranker. Either it's too dissimilar to the query, or "
-                "the ERP ID isn't in the index."
+                "Not surfaced by any retriever for this query. Either it's too "
+                "dissimilar, or the ERP ID isn't in the index."
             )
-
-
