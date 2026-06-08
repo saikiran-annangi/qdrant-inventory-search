@@ -5,7 +5,7 @@ Replaces the embedding-based classify_query_taxonomy() with two fast
 Gemini Flash calls that always return a taxonomy result and always map
 into labels that actually exist in the collection.
 
-Stage 1: classify domain  (Electrical / Mechanical / Plumbing / Unknown)
+Stage 1: classify domain  (Electrical / Mechanical / Plumbing / Tools & Site / Unknown)
          ~50 token prompt — 3 choices.
 
 Stage 2: classify category/subcategory within the identified domain.
@@ -49,48 +49,44 @@ def _get_client():
 
 def _load_labels() -> None:
     """
-    Build domain → sorted list of "Category > Subcategory" strings from
-    taxonomy_cache.json.  Falls back to PRODUCT_TAXONOMY from config when
-    the cache file is absent (e.g. first run before Phase 1 is complete).
-    Loaded once at process start; subsequent calls are no-ops.
+    Build domain → sorted list of "Category > Subcategory" strings DIRECTLY from
+    PRODUCT_TAXONOMY (the single source of truth in data/taxonomy.py).
+
+    The query classifier's candidate labels are exactly the controlled
+    vocabulary the products are classified into — so a label the classifier
+    picks always corresponds to real products, and every product label is
+    reachable. (Previously this read taxonomy_cache.json and filtered to a
+    hand-authored list, which let the two sides drift apart.) Loaded once at
+    process start; subsequent calls are no-ops.
     """
     global _labels_by_domain, _labels_loaded
     if _labels_loaded:
         return
 
-    from config import TAXONOMY_CACHE_PATH, PRODUCT_TAXONOMY
+    # Prefer the open taxonomy store's labels projection (taxonomy_labels.json),
+    # which includes any nodes ingestion auto-created — so the query side and the
+    # product side always offer the SAME vocabulary, even as it grows. Fall back
+    # to the curated seed (PRODUCT_TAXONOMY) when the store hasn't been built yet.
+    from config import PRODUCT_TAXONOMY, TAXONOMY_LABELS_PATH
 
-    labels: dict = {"Electrical": set(), "Mechanical": set(), "Plumbing": set()}
+    labels: dict = {}
+    if os.path.exists(TAXONOMY_LABELS_PATH):
+        try:
+            with open(TAXONOMY_LABELS_PATH) as f:
+                store_labels = json.load(f)
+            for domain, lab_list in store_labels.items():
+                labels[domain] = set(lab_list)
+        except Exception as exc:
+            logger.warning("Failed reading %s (%s); using seed taxonomy",
+                           TAXONOMY_LABELS_PATH, exc)
+            labels = {}
 
-    # Build set of predefined label strings for filtering
-    predefined_labels: set = set()
-    for domain, categories in PRODUCT_TAXONOMY.items():
-        for category, subcategories in categories.items():
-            for subcategory in subcategories:
-                predefined_labels.add(f"{category} > {subcategory}")
-
-    if os.path.exists(TAXONOMY_CACHE_PATH):
-        with open(TAXONOMY_CACHE_PATH) as f:
-            cache = json.load(f)
-        for entry in cache.values():
-            domain      = entry.get("taxonomy_domain",      "") or ""
-            category    = entry.get("taxonomy_category",    "") or ""
-            subcategory = entry.get("taxonomy_subcategory", "") or ""
-            label       = f"{category} > {subcategory}"
-            # Only include labels from the predefined MEP vocabulary.
-            # LLM-invented labels (from non-MEP items like tools, stationery)
-            # would produce a taxonomy_subcategory that no product in the collection
-            # matches, making the soft boost a no-op at best or wrong at worst.
-            if domain in labels and category and subcategory and label in predefined_labels:
-                labels[domain].add(label)
-
-    # Always include predefined nodes so the list is never empty
-    for domain, categories in PRODUCT_TAXONOMY.items():
-        if domain not in labels:
-            labels[domain] = set()
-        for category, subcategories in categories.items():
-            for subcategory in subcategories:
-                labels[domain].add(f"{category} > {subcategory}")
+    if not labels:
+        for domain, categories in PRODUCT_TAXONOMY.items():
+            labels.setdefault(domain, set())
+            for category, subcategories in categories.items():
+                for subcategory in subcategories:
+                    labels[domain].add(f"{category} > {subcategory}")
 
     _labels_by_domain = {d: sorted(v) for d, v in labels.items() if v}
     total = sum(len(v) for v in _labels_by_domain.values())
@@ -107,8 +103,15 @@ def _load_labels() -> None:
 # ---------------------------------------------------------------------------
 
 _STAGE1_PROMPT = """\
-Classify this industrial product search query into one domain.
-Domains: Electrical, Mechanical, Plumbing, Unknown
+Classify this product search query into one domain for an electrical/MEP distributor catalog.
+Domains: Electrical, Mechanical, Plumbing, Tools & Site, Unknown
+
+Domain hints:
+- Electrical: conduit/EMT/rigid/flex/BX fittings, conduit saddles & clamps, P-clamps for cable or conduit, wire connectors, circuit breakers, RCBOs, fuses, outlets/GPOs, switches, cable & wire, lugs, terminals, cable ties, cable glands, heatshrink, cable tray/ladder/strut, lighting, LED lamps, luminaires, fans, enclosures, junction boxes, contactors, relays, data/comms (Cat6, fibre, patch panels), solar/EV
+- Mechanical: air-conditioning units, mechanical ducting, whitegoods/appliances (cookers, rangehoods, hand dryers, catering)
+- Plumbing: water heating elements & units, flexible hose & fittings, hose clamps, plumbing valves & pipe fittings
+- Tools & Site: drills, holesaws, saws, hand tools (pliers, screwdrivers, spanners), power tools, test & measurement (multimeters, testers), safety/PPE (gloves, eyewear), labelling & marking, adhesives & sealants, fasteners & fixings, ladders
+- When the query involves conduit, cable, wiring, or electrical fittings — even if it mentions "clamp" or "strap" — classify as Electrical, NOT Mechanical or Tools
 
 Query: {query}
 
@@ -158,6 +161,7 @@ _MODEL_NUMBER_PREFIXES = (
     "pn:", "p/n:", "p/n ", "stk no.", "stk no ", "cat#", "cat #",
     "part#", "part #", "part no.", "ref#", "ref #", "item#", "item #",
     "(model ", "model no.", "model no ", "model# ", "model #",
+    "sku ", "sku:", "sku#",
 )
 
 
@@ -199,7 +203,7 @@ def classify_query_taxonomy_llm(query: str, query_type: str) -> dict:
         if not match1:
             return {}
         domain = json.loads(match1.group()).get("domain", "Unknown")
-        if domain not in ("Electrical", "Mechanical", "Plumbing"):
+        if domain not in ("Electrical", "Mechanical", "Plumbing", "Tools & Site"):
             return {}
     except Exception as exc:
         logger.warning("Taxonomy Stage 1 failed for %r: %s", query, exc)

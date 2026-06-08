@@ -43,6 +43,14 @@ DATA_DIR = os.path.join(REPO_ROOT, "inventory_data")
 ENRICHMENT_CACHE_PATH    = os.path.join(REPO_ROOT, "enrichment_cache.json")
 TAXONOMY_EMBEDDINGS_PATH = os.path.join(REPO_ROOT, "taxonomy_embeddings.json")
 TAXONOMY_CACHE_PATH      = os.path.join(REPO_ROOT, "taxonomy_cache.json")
+# Open, self-growing taxonomy store (seeded from PRODUCT_TAXONOMY, grows at
+# ingest time). taxonomy_store.json holds nodes+embeddings (ingest side);
+# taxonomy_labels.json is the labels-only projection the query side reads.
+TAXONOMY_STORE_PATH      = os.path.join(REPO_ROOT, "taxonomy_store.json")
+TAXONOMY_LABELS_PATH     = os.path.join(REPO_ROOT, "taxonomy_labels.json")
+# Confidence gates for the open vocabulary (see data/taxonomy_store.py).
+TAXONOMY_ASSIGN_THRESHOLD = 0.55   # product↔node cosine to assign an existing node
+TAXONOMY_DEDUP_THRESHOLD  = 0.86   # new-node↔existing cosine to reuse instead of mint
 
 # ---------------------------------------------------------------------------
 # Retrieval tuning: prefetch limits per query type
@@ -90,140 +98,9 @@ INGEST_BATCH_SIZE = 256
 # (ingest side).
 # ---------------------------------------------------------------------------
 
-PRODUCT_TAXONOMY = {
-    "Mechanical": {
-        "Air handling units & packaged equipment": [
-            "Rooftop units", "Indoor AHUs", "DOAS units",
-            "Make-up air units", "Split systems",
-        ],
-        "Chillers": [
-            "Air-cooled scroll", "Air-cooled screw",
-            "Water-cooled centrifugal", "Water-cooled screw", "Absorption",
-        ],
-        "Boilers & heating plant": [
-            "Condensing gas boilers", "Non-condensing boilers",
-            "Electric boilers", "Steam boilers", "Heat exchangers",
-        ],
-        "Terminal units & zone equipment": [
-            "VAV boxes", "Fan-coil units", "Unit heaters", "Cabinet heaters",
-            "Chilled beams", "VRF indoor units", "Mini-splits",
-        ],
-        "Fans & air moving devices": [
-            "Centrifugal fans", "Axial fans", "Inline fans", "Exhaust fans",
-            "Ceiling fans", "Jet fans", "Energy recovery ventilators",
-        ],
-        "Pumps & hydronic accessories": [
-            "Base-mounted end suction", "Inline circulators", "Vertical turbine",
-            "Condensate pumps", "Expansion tanks", "Air separators",
-        ],
-        "Ductwork & air distribution accessories": [
-            "Sheet metal duct", "Flex duct", "Fiberglass duct board",
-            "Diffusers", "Registers/grilles", "Dampers", "Sound attenuators",
-        ],
-        "Piping, valves & hydronic specialties": [
-            "Steel pipe", "Copper pipe", "PVC/CPVC", "Grooved fittings",
-            "Gate/globe/ball valves", "Check valves", "Strainers", "Flow meters",
-        ],
-        "Fire suppression equipment": [
-            "Sprinkler heads", "Fire pumps", "Standpipe valves",
-            "Backflow preventers", "Clean agent systems", "Pre-action/deluge valves",
-        ],
-        "Fire detection & alarm devices": [
-            "Smoke detectors", "Heat detectors", "Duct detectors", "Pull stations",
-            "Notification appliances", "FACP", "Aspirating detection",
-        ],
-        "Controls, sensors & actuators": [
-            "DDC controllers", "Temperature sensors", "Pressure transducers",
-            "CO2/IAQ sensors", "Humidity sensors", "Control valves",
-            "Damper actuators", "VFDs",
-        ],
-        "Vibration isolation & seismic restraints": [
-            "Spring isolators", "Rubber mounts", "Inertia bases",
-            "Seismic snubbers", "Flexible connectors", "Pipe restraints",
-        ],
-    },
-    "Electrical": {
-        "Switchgear, switchboards & panelboards": [
-            "MV switchgear", "LV switchboards", "Panelboards", "MCCs", "Busway",
-        ],
-        "Transformers": [
-            "Dry-type LV", "Medium voltage", "K-rated", "Buck-boost", "Isolation",
-        ],
-        "Generators & emergency power": [
-            "Diesel generators", "Natural gas generators", "Bi-fuel",
-            "Portable", "Paralleling switchgear",
-        ],
-        "UPS & battery systems": [
-            "Online double-conversion", "Line-interactive",
-            "Lithium-ion BESS", "Lead-acid VRLA", "Nickel-cadmium",
-        ],
-        "Luminaires & lighting controls": [
-            "LED troffers", "Downlights", "Linear fixtures", "High-bay",
-            "Exterior", "Emergency/exit", "Occupancy sensors", "Dimmers",
-            "Lighting control panels",
-        ],
-        "Conductors, cable & raceways": [
-            "Building wire (THHN/XHHW)", "MC cable", "MI cable",
-            "Fire alarm cable", "Tray cable", "Conduit (EMT/RGS/PVC)",
-            "Cable tray", "Wireway",
-        ],
-        "Low-voltage & structured cabling": [
-            "Cat6/6A UTP/STP", "Fiber optic (SM/MM)", "Patch panels",
-            "Racks/cabinets", "Wireless APs", "DAS/BDA",
-        ],
-        "Security, access control & AV": [
-            "IP cameras", "Access control panels", "Card readers",
-            "Intercoms", "Intrusion detection", "AV displays", "Speakers",
-        ],
-        "Grounding, lightning & surge protection": [
-            "Ground rods", "Ground bars", "Grounding conductors",
-            "Air terminals", "Down conductors", "SPDs",
-        ],
-        "Solar PV, EV charging & renewables": [
-            "PV modules", "Inverters", "Racking", "Combiner boxes",
-            "EV chargers (L2/DCFC)", "Wind turbines", "Energy storage",
-        ],
-    },
-    "Plumbing": {
-        "Plumbing fixtures & fittings": [
-            "Water closets", "Lavatories", "Sinks", "Urinals", "Showers",
-            "Drinking fountains", "Faucets", "Flush valves",
-        ],
-        "Domestic water heaters": [
-            "Gas storage", "Gas tankless", "Electric storage",
-            "Electric tankless", "Heat pump", "Solar thermal", "Semi-instantaneous",
-        ],
-        "Pumps (domestic, sewage, sump)": [
-            "Booster pumps", "Recirculation pumps", "Sewage ejectors",
-            "Sump pumps", "Grinder pumps", "Condensate pumps",
-        ],
-        "Pipe, fittings & valves — domestic water": [
-            "Copper (Type K/L/M)", "PEX", "CPVC", "SS", "Fittings",
-            "Ball/gate/check valves", "PRVs", "Backflow preventers", "TMVs",
-        ],
-        "Sanitary drainage pipe, fittings & accessories": [
-            "Cast iron (hub/no-hub)", "PVC DWV", "ABS", "HDPE",
-            "Cleanouts", "Floor drains", "Trench drains", "Interceptors",
-        ],
-        "Stormwater management": [
-            "Roof drains", "Overflow drains", "Leaders/downspouts",
-            "Siphonic systems", "Retention/detention", "Rainwater harvesting",
-        ],
-        "Natural gas piping & components": [
-            "Black steel pipe", "CSST", "Gas valves", "Regulators",
-            "Gas meters", "Flex connectors", "Seismic shutoffs",
-        ],
-        "Water treatment equipment": [
-            "Water softeners", "RO systems", "UV disinfection",
-            "Filtration", "Chemical treatment", "Deionization",
-        ],
-        "Medical gas systems": [
-            "Oxygen", "Medical air", "Vacuum", "Nitrous oxide", "Nitrogen",
-            "WAGD", "Zone valves", "Alarms", "Outlets",
-        ],
-        "Specialty plumbing": [
-            "Pool pumps", "Pool filters", "Chemical feeders", "Air compressors",
-            "Air dryers", "Irrigation controllers", "Greywater systems",
-        ],
-    },
-}
+# The product taxonomy is the SINGLE SOURCE OF TRUTH and lives in its own
+# module (data/taxonomy.py). The query classifier, the embedding builder, the
+# product classifier, and the search-time boost all derive from it — so they
+# can never drift apart. CATEGORY_MAP gives a deterministic ERP-category ->
+# taxonomy-node mapping for products that already carry a category.
+from data.taxonomy import PRODUCT_TAXONOMY, CATEGORY_MAP  # noqa: E402,F401

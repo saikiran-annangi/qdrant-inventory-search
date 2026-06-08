@@ -14,6 +14,12 @@ inventory data/
 enrichment_cache.json
 taxonomy_cache.json
 taxonomy_embeddings.json
+taxonomy_store.json
+taxonomy_labels.json
+query_expansion_cache.json
+
+# Local embedded Qdrant store (created when QDRANT_LOCAL_PATH is set)
+qdrant_local/
 
 # Per-run eval output (large per-query logs; scripts overwrite eval_results.json at repo root)
 eval_results_*.json

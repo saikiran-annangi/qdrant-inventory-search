@@ -119,6 +119,40 @@ class _MpnetEncoder:
 
         return vec[0].cpu().numpy()
 
+    def encode_batch(
+        self,
+        sentences: list,
+        batch_size: int = 128,
+        normalize_embeddings: bool = True,
+        show_progress_bar: bool = False,
+    ):
+        """Return a numpy (N, 768) array for a list of sentences.
+
+        Same mean-pool + L2-normalize as encode(), but tokenizes and runs the
+        model in batches — ~10-20x faster than calling encode() per item, which
+        matters a lot for ingest (tens of thousands of products).
+        """
+        import numpy as np
+        import torch.nn.functional as F
+
+        out_vecs = []
+        for start in range(0, len(sentences), batch_size):
+            chunk = sentences[start:start + batch_size]
+            enc = self.tokenizer(
+                chunk, padding=True, truncation=True, max_length=512, return_tensors="pt",
+            )
+            with self._torch.no_grad():
+                out = _mpnet_forward(self.model, enc)
+            tok  = out.last_hidden_state
+            mask = enc["attention_mask"].unsqueeze(-1).float()
+            vec  = (tok * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
+            if normalize_embeddings:
+                vec = F.normalize(vec, p=2, dim=1)
+            out_vecs.append(vec.cpu().numpy())
+        if not out_vecs:
+            return np.zeros((0, self.model.config.hidden_size), dtype=np.float32)
+        return np.vstack(out_vecs)
+
 
 def get_dense_model():
     """Return the dense encoder, loading it on first call."""
@@ -146,23 +180,39 @@ def encode_query(query: str) -> tuple:
         sparse_model_vec -- SparseVector, BM25 over model number variants
         sparse_desc_vec  -- SparseVector, BM25 over spec-normalized text
     """
-    from data.normalizers import model_number_variants, spec_text_with_attributes
+    from data.normalizers import model_number_variants, spec_text_with_attributes, strip_model_number_prefix
+    from data.synonyms import expand_synonyms
 
     dense_model = get_dense_model()
     bm25_model  = get_bm25_model()
 
-    # Dense embedding
+    # Static trade-jargon synonym map (zero latency, no LLM call).
+    # Bridges known MEP trade terms to catalog vocabulary for products that may
+    # not yet have been enriched (e.g. a newly added source before next ingest).
+    # For enriched products this is a safety net — the trade terms are already
+    # baked into the product's extended_description by domain-aware enrichment,
+    # so the dense and BM25 channels find them without query expansion anyway.
+    # The LLM query expander was removed from the hot path: enrichment solved
+    # the vocabulary gap at the index side, making a per-query LLM call redundant.
+    expanded = expand_synonyms(query)
+
+    # Dense embedding (on the jargon-expanded text)
     dense_vec = dense_model.encode(
-        query, normalize_embeddings=True, show_progress_bar=False
+        expanded, normalize_embeddings=True, show_progress_bar=False
     ).tolist()
 
-    # Sparse: model-number field uses variant expansion
-    model_text = model_number_variants(query) or query
+    # Sparse: model-number field uses variant expansion. Uses the BARE query
+    # (no synonyms — synonyms must not pollute part-number matching).
+    # Strip ERP prefixes (p/n, cat#, sku, stk no.) first so noise tokens
+    # ("cat", "p", "n") don't flood the BM25 pool with wrong products.
+    bare_query = strip_model_number_prefix(query)
+    model_text = model_number_variants(bare_query) or bare_query
 
     # Sparse: description field uses spec + dimension normalization plus
-    # canonical attribute anchors (so lamp bases / NEMA classes match). Metric
-    # bridging is query-side only (documents stay canonical at ingest).
-    desc_text = spec_text_with_attributes(query, bridge_metric=True) or query
+    # canonical attribute anchors (so lamp bases / NEMA classes match), on the
+    # jargon-expanded query. Metric bridging is query-side only (documents stay
+    # canonical at ingest).
+    desc_text = spec_text_with_attributes(expanded, bridge_metric=True) or expanded
 
     sm_result = list(bm25_model.embed([model_text]))[0]
     sd_result = list(bm25_model.embed([desc_text]))[0]

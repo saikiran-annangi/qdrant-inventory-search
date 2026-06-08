@@ -77,7 +77,15 @@ def main():
         dense_base = " ".join(x for x in [desc, ext, mfr, cat, model] if x)
         dense_texts.append(dense_base.strip() or r["internal_id"])
 
-        sm_texts.append(model_number_variants(model) or model or r["internal_id"])
+        # Include internal_id variants when they differ from model_number so
+        # ERP-code queries ("sku BRAG2CR19C") can reach products whose catalog
+        # model_number uses a different prefix (e.g. G2CR19C vs BRAG2CR19C).
+        iid = r["internal_id"]
+        sm_base = model_number_variants(model) or model or iid
+        if iid and iid.lower() != (model or "").lower():
+            iid_extra = model_number_variants(iid) or iid
+            sm_base = (sm_base + " " + iid_extra).strip()
+        sm_texts.append(sm_base)
 
         desc_text = " ".join(x for x in [desc, ext, mfr, cat] if x)
         sd_texts.append(
@@ -90,12 +98,10 @@ def main():
 
     print("Encoding dense vectors (all-mpnet, batched)…")
     t0 = time.time()
-    dense_vecs = []
-    for i, t in enumerate(dense_texts):
-        dense_vecs.append(dense_model.encode(t, normalize_embeddings=True).tolist())
-        if (i + 1) % 2000 == 0:
-            print(f"  {i+1}/{len(dense_texts)}  ({(i+1)/(time.time()-t0):.1f}/s)")
-    print(f"  Dense done in {time.time()-t0:.0f}s")
+    dense_arr = dense_model.encode_batch(dense_texts, batch_size=128, normalize_embeddings=True)
+    dense_vecs = [v.tolist() for v in dense_arr]
+    dt = time.time() - t0
+    print(f"  Dense done in {dt:.0f}s ({len(dense_texts)/(dt+1e-9):.0f}/s)")
 
     print("Encoding sparse_model (BM25)…")
     sm_vecs = [SparseVector(indices=r.indices.tolist(), values=r.values.tolist())
