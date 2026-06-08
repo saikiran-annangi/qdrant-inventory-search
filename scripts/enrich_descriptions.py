@@ -75,151 +75,54 @@ def _needs_enrichment(desc: str) -> bool:
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Domain-aware system prompts
 # ---------------------------------------------------------------------------
-# One prompt per MEP domain, each with domain-specific few-shot examples.
-# The LLM follows examples far more reliably than instructions alone — so an
-# electrical product shown electrical examples generates electrical trade terms,
-# a plumbing product shown plumbing examples generates plumbing trade terms, etc.
-# This is what makes enrichment work for ALL MEP domains, not just the two
-# queries that originally failed.
+# System prompt — PrefPO-optimised, 366 tokens, 87% quality on curated test.
+# ---------------------------------------------------------------------------
+# Optimised by PrefPO (champion-challenger, 25 rounds) starting from the
+# 450-token domain-aware prompt. Result: 366 tokens, 87% quality (vs 83%
+# at 450 tokens) — cheaper AND better.
+#
+# Architecture: general instruction + correction map.
+#   Layer 1: "Include field trade names in single quotes" — handles ANY
+#            product type using the model's built-in MEP knowledge.
+#   Layer 2: Inline map of ~20 terms the model gets wrong without help
+#            (regional jargon: GPO/power point; brand-as-generic: Fernco;
+#             specialist HVAC: canvas connection; AU-specific: TPS/flat cable).
+#   1 example: teaches the output format (quoting style, size bridge).
+#
+# For Phase 2 (fine-tuning the embedding model), simplify this prompt
+# significantly — the fine-tuned encoder handles vocabulary natively.
 # ---------------------------------------------------------------------------
 
-_PROMPT_BASE = (
-    "You write product descriptions for an MEP distributor catalog. "
-    "Input format: abbreviated label | manufacturer | model | category. "
-    "Output: 2-3 sentences in plain English covering:\n"
-    "  1. What the product is and what it does — expand all abbreviations.\n"
-    "  2. Common trade names or synonyms that {trade} use for it in the field.\n"
-    "  3. Compatible {compat} where applicable.\n"
-    "Rules: lowercase, factual only — no marketing language, no bullet points. "
-    "Output ONLY the description — no preamble, no quotes.\n\n"
-    "Examples:\n{examples}"
+_SYSTEM_PROMPT = (
+    "Write 2-3 sentence, lowercase, factual, no-marketing MEP product descriptions. "
+    "Expand all abbreviations. Include field trade names in single quotes "
+    "(e.g. BX/FLEX=\'dry connector\'/\'flex connector\'/\'not liquidtight\', "
+    "P-trap=\'bottle trap\'/\'u-bend\'/\'drain trap\', "
+    "no-hub coupling=\'Fernco\'/\'mission coupling\'/\'rubber band coupler\', "
+    "ball valve=\'isolation valve\'/\'stopcock\'/\'quarter-turn\', "
+    "GPO=\'power point\'/\'socket\'/\'general purpose outlet\', "
+    "VAV terminal=\'VAV box\'/\'zone box\'/\'VAV terminal\', "
+    "fan coil=\'FCU\'/\'chilled water FCU\', EMT=\'thinwall\', "
+    "RCBO=\'safety switch\'/\'GFCI\', "
+    "flexible duct connector=\'canvas connection\'/\'vibration isolator\'/\'flexible connector\', "
+    "Y-strainer=\'line strainer\'/\'basket strainer\'/\'y-strainer\', "
+    "conduit saddle=\'conduit strap\'/\'one-hole strap\'/\'pipe strap\', "
+    "liquidtight connector=\'sealtight\'/\'watertight\', "
+    "lug=\'cable lug\'/\'crimp lug\', "
+    "push fitting=\'push fit\'/\'push to connect\'/\'sharkbite\', "
+    "angle stop=\'under-sink valve\'/\'supply stop\', "
+    "MCB 3P=\'triple pole MCB\'/\'three pole MCB\', "
+    "AHU=\'rooftop unit\'/\'RTU\', cable=\'flat cable\'/\'TPS\', "
+    "switch=\'rocker switch\'/\'light switch\'). "
+    "Note compatible wire gauge (AWG/MCM/kcmil), pipe size (NPS/CTS), or airflow (CFM). "
+    "Output description only.\n\n"
+    "label | manufacturer | model | category\n"
+    "CLAMP 1.69-1.98IN CABLE 1-1/2IN EMT | Cooper B-Line | B2000 | Conduit Fittings\n"
+    "\u2192 1-1/2-inch electrical metallic tubing (EMT) clamp (\'one-hole strap\'/\'p-clamp\') "
+    "for securing 1.69-1.98-inch diameter cables (e.g. 250 kcmil, 4/0 AWG)."
 )
 
-_ELEC_EXAMPLES = (
-    "CONNECTOR BX/FLEX 2IN 2-SCREW ALUMINUM | ABB | CI2116 | Conduit Fittings\n"
-    "→ two-screw aluminum connector for attaching 2-inch flexible metal conduit "
-    "(BX or armored cable) to an electrical box knockout; field trade name is "
-    "'dry connector' because it is not liquidtight; also called flex connector or BX connector.\n\n"
-    "CLAMP 1.69-1.98IN CABLE 1-1/2IN EMT-RIG | ABB | CPC150 | Conduit Supports\n"
-    "→ p-type cable clamp (P-clamp) securing large power cable to 1-1/2-inch EMT "
-    "or rigid conduit; jaw 1.69–1.98 inches fits 250 MCM through 350 MCM (kcmil) "
-    "including 4/0 AWG.\n\n"
-    "RCBO 1P+N 40A 6KA C 30MA | Schneider Electric | A9D31640 | Circuit Breakers\n"
-    "→ single-pole plus neutral residual current circuit breaker with overcurrent "
-    "protection, 40 amp, 6kA, C-curve, 30mA; also called GFCI breaker or safety switch.\n\n"
-    "LUG AL 1-HOLE 250MCM | Burndy | YA250 | Lugs & Links\n"
-    "→ single-hole aluminum compression lug (crimp lug, cable lug) for terminating "
-    "250 MCM (kcmil) aluminum conductor to a bus bar or equipment terminal."
-)
-
-_PLUMB_EXAMPLES = (
-    "COUPLING FLEX 4IN NO-HUB | Fernco | P1056-44 | Pipe Fittings\n"
-    "→ flexible rubber no-hub coupling (Fernco coupling) joining two 4-inch "
-    "cast-iron or PVC drain pipes; used by plumbers where rigid fittings cannot "
-    "be rotated; also called a fernco, mission coupling, or rubber band coupler.\n\n"
-    "TRAP 1-1/2IN P ABS | Genova | 73715 | Drain Fittings\n"
-    "→ 1-1/2-inch ABS P-trap (sink trap, drain trap) that holds a water seal "
-    "to block sewer gas; fits standard lavatory and kitchen sink waste outlets; "
-    "also called a U-bend or bottle trap.\n\n"
-    "VALVE BALL 3/4IN CPVC | Spears | 2522-007 | Valves\n"
-    "→ 3/4-inch CPVC full-port ball valve (isolation valve, shutoff valve) for "
-    "hot and cold domestic water; quarter-turn operation; compatible with 3/4-inch "
-    "NPS (nominal pipe size) CPVC solvent-weld fittings.\n\n"
-    "FITTING PUSH 1/2IN ELBOW | SharkBite | U256LFA | Push Fittings\n"
-    "→ 1/2-inch push-to-connect elbow (SharkBite fitting, push-fit fitting) "
-    "joining copper, PEX, or CPVC pipe without soldering or crimping; "
-    "works on 1/2-inch CTS (copper tube size) pipe."
-)
-
-_MECH_EXAMPLES = (
-    "VAV BOX SDZ 12IN 0-2000CFM | Trane | VCVL12 | HVAC Terminal Units\n"
-    "→ single-duct variable air volume terminal unit (VAV box, VAV terminal) "
-    "controlling airflow from 0 to 2000 CFM through a 12-inch round duct inlet; "
-    "used by mechanical contractors to zone heating and cooling in commercial buildings.\n\n"
-    "FAN COIL 2-PIPE 800CFM 240V | Daikin | FWD08ATN | Fan Coil Units\n"
-    "→ horizontal ceiling-concealed fan coil unit (FCU) for 2-pipe chilled-water "
-    "or hot-water HVAC systems; 800 CFM capacity; also called a chilled beam "
-    "terminal or hydronic fan coil; connects to 240V supply.\n\n"
-    "FLEX DUCT CONN 14IN FABRIC | Vibro-Acoustics | FDC-14 | Ductwork\n"
-    "→ 14-inch fabric flexible duct connector (flex connection, duct isolation "
-    "connector) isolating air-handling equipment vibration from the duct system; "
-    "also called a canvas connection or vibration isolator collar.\n\n"
-    "STRAINER Y-TYPE 2IN 150LB | Watts | LF777 | Hydronic Specialties\n"
-    "→ 2-inch Y-type strainer (Y-strainer, line strainer) removing debris from "
-    "hydronic heating and cooling pipework; 150 lb flanged ends; compatible with "
-    "2-inch NPS carbon steel or copper pipe."
-)
-
-_DOMAIN_PROMPTS = {
-    "Electrical": _PROMPT_BASE.format(
-        trade="electricians and electrical contractors",
-        compat="wire sizes (AWG, MCM/kcmil), conduit trade sizes, or voltage ratings",
-        examples=_ELEC_EXAMPLES,
-    ),
-    "Plumbing": _PROMPT_BASE.format(
-        trade="plumbers and plumbing contractors",
-        compat="pipe sizes (NPS, CTS, OD), pressure ratings, or material compatibility",
-        examples=_PLUMB_EXAMPLES,
-    ),
-    "Mechanical": _PROMPT_BASE.format(
-        trade="mechanical contractors and HVAC technicians",
-        compat="duct sizes, airflow (CFM), pipe sizes, or voltage/refrigerant ratings",
-        examples=_MECH_EXAMPLES,
-    ),
-}
-# Default for unknown / Tools & Site domains
-_SYSTEM_PROMPT_DEFAULT = _PROMPT_BASE.format(
-    trade="electrical, mechanical, and plumbing contractors",
-    compat="sizes, ratings, or compatible materials",
-    examples=_ELEC_EXAMPLES + "\n\n" + _PLUMB_EXAMPLES[:_PLUMB_EXAMPLES.index("\n\nVALVE")],
-)
-
-# Re-export as _SYSTEM_PROMPT for backwards compatibility with callers that
-# reference it directly (e.g. tests / scripts).
-_SYSTEM_PROMPT = _SYSTEM_PROMPT_DEFAULT
-
-
-def _domain_from_record(record: dict) -> str:
-    """Infer MEP domain from product_category + description for prompt selection."""
-    text = (
-        (record.get("product_category") or "") + " " +
-        (record.get("description") or "")
-    ).lower()
-    elec = sum(1 for k in (
-        "electrical","lighting","circuit","breaker","cable","conduit","wire",
-        "switch","outlet","relay","contactor","transformer","fuse","led","lamp",
-        "mcb","rcbo","lug","terminal","gland","earth","solar","fan","enclosure",
-    ) if k in text)
-    plumb = sum(1 for k in (
-        "plumbing","water","pipe","valve","drain","fitting","trap","coupling",
-        "toilet","sink","shower","faucet","sewer","pvc","cpvc","pex","copper",
-    ) if k in text)
-    mech = sum(1 for k in (
-        "hvac","duct","ahu","coil","damper","vav","vrf","chiller","boiler",
-        "air handling","fan coil","fcu","ventilation","refrigerant","hydronic",
-    ) if k in text)
-    best = max(elec, plumb, mech)
-    if best == 0:
-        return "Default"
-    if elec == best:
-        return "Electrical"
-    if plumb == best:
-        return "Plumbing"
-    return "Mechanical"
-
-
-# System prompt sent once per session (cached by the API — not re-charged per call).
-# User message carries only the compact product line, keeping per-call tokens minimal.
-# (Legacy variable kept for any callers that imported _SYSTEM_PROMPT directly.)
-_EXHAUST_FAN_EXAMPLE = (
-    "EXHAUST FAN 190MM P/CORD LOUV | Whisper | EC190WP | Ventilation\n"
-    "→ window-mounted exhaust fan with a 190mm blade, pull cord operation, and a "
-    "louvred grille; suitable for bathrooms and utility rooms."
-)
-
-# Per-field input length caps — prevents oversized prompts for edge-case long descriptions.
 _MAX_DESC  = 150
 _MAX_MFR   = 40
 _MAX_MODEL = 30
@@ -251,17 +154,11 @@ def _generate(client: OpenAI, record: dict) -> tuple[str, str]:
         f"{_truncate(record['model_number'], _MAX_MODEL)} | "
         f"{_truncate(record['product_category'], _MAX_CAT)}"
     )
-    # Pick the domain-specific prompt so examples match the product type.
-    # An electrical product gets electrical trade-term examples; a plumbing
-    # product gets plumbing examples — the LLM follows examples, not just
-    # instructions, so this is what makes enrichment work across all MEP domains.
-    domain = _domain_from_record(record)
-    system_prompt = _DOMAIN_PROMPTS.get(domain, _SYSTEM_PROMPT_DEFAULT)
     for _ in range(2):  # retry once on bad output
         resp = client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": system_prompt},
+                {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user",   "content": user_msg},
             ],
             max_tokens=120,
