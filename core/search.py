@@ -30,6 +30,7 @@ from models.reranker import rerank_with_scores
 from data.normalizers import (
     size_anchor_tokens, doc_size_anchors,
     attribute_anchor_tokens, attribute_relation,
+    clean_bom_query,
 )
 
 # Dense vectors are int8-quantized (see scripts/ingest.py). Rescore re-scores
@@ -50,6 +51,17 @@ TAXONOMY_BOOST = 0.8
 # Post-rerank passes (applied in order: taxonomy → size → attribute)
 # ---------------------------------------------------------------------------
 
+def _norm_label(s: str) -> str:
+    """Normalize a taxonomy label for matching: casefold + collapse whitespace.
+
+    Query-predicted labels and product payload labels both come from the same
+    controlled vocabulary (data/taxonomy.py), so they should match exactly — but
+    normalizing makes the match robust to incidental casing/whitespace drift so
+    a real match can never be missed on a cosmetic difference.
+    """
+    return " ".join((s or "").strip().casefold().split())
+
+
 def apply_taxonomy_boost(hits: list, ce_scores: dict, tax_result: dict) -> tuple:
     """
     Soft score bonus for items whose taxonomy matches the predicted label.
@@ -67,8 +79,8 @@ def apply_taxonomy_boost(hits: list, ce_scores: dict, tax_result: dict) -> tuple
     if not tax_result or not hits:
         return hits, ce_scores, set()
 
-    tax_subcat = (tax_result.get("taxonomy_subcategory", "") or "").strip()
-    tax_cat    = (tax_result.get("taxonomy_category",    "") or "").strip()
+    tax_subcat = _norm_label(tax_result.get("taxonomy_subcategory", ""))
+    tax_cat    = _norm_label(tax_result.get("taxonomy_category",    ""))
 
     if not tax_subcat and not tax_cat:
         return hits, ce_scores, set()
@@ -82,8 +94,8 @@ def apply_taxonomy_boost(hits: list, ce_scores: dict, tax_result: dict) -> tuple
         # Fall back to RRF score when CE score is nan (model numerical instability)
         base = float(hit.score) if (raw is None or (isinstance(raw, float) and math.isnan(raw))) else raw
 
-        payload_subcat = (hit.payload.get("taxonomy_subcategory", "") or "").strip()
-        payload_cat    = (hit.payload.get("taxonomy_category",    "") or "").strip()
+        payload_subcat = _norm_label(hit.payload.get("taxonomy_subcategory", ""))
+        payload_cat    = _norm_label(hit.payload.get("taxonomy_category",    ""))
 
         if tax_subcat and payload_subcat == tax_subcat:
             boosted[hid] = base + TAXONOMY_BOOST
@@ -191,6 +203,7 @@ def search(
       9. Electrical attribute sort (more matches > fewer conflicts)
     """
     client = get_client()
+    query  = clean_bom_query(query)
 
     if query_type is None:
         query_type = classify_query(query) if USE_CLASSIFIER else DEFAULT_PROFILE
@@ -264,6 +277,7 @@ def search_with_observability(
         channel_hits     -- per-retriever {internal_id: rank} for ERP lookup
     """
     client  = get_client()
+    query   = clean_bom_query(query)
     timings = {}
 
     t0 = time.perf_counter()

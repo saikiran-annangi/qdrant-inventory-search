@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # loads .env
 
-from config import PRODUCT_TAXONOMY, TAXONOMY_EMBEDDINGS_PATH, TAXONOMY_CACHE_PATH, DENSE_MODEL_NAME
+from config import PRODUCT_TAXONOMY, TAXONOMY_EMBEDDINGS_PATH, DENSE_MODEL_NAME
 
 
 def _load_encoder():
@@ -31,7 +31,12 @@ def main():
     nodes = []
     seen_keys = set()
 
-    # Start with all 213 predefined nodes from config
+    # The controlled vocabulary in data/taxonomy.py is the ONLY source of nodes.
+    # We deliberately do NOT merge any labels back in from taxonomy_cache.json:
+    # doing so created a feedback loop where LLM-invented labels accumulated into
+    # a 1,473-node mess that the query side (247 config labels) could never match.
+    # Embedding only the controlled vocabulary keeps query-side and product-side
+    # labels identical by construction.
     for domain, categories in PRODUCT_TAXONOMY.items():
         for category, subcategories in categories.items():
             for subcategory in subcategories:
@@ -47,44 +52,9 @@ def main():
                 })
 
     predefined_count = len(nodes)
-    print(f"  {predefined_count} predefined nodes from config")
+    print(f"  {predefined_count} controlled-vocabulary nodes from data/taxonomy.py")
 
-    # Add unique LLM-invented nodes from taxonomy_cache.json
-    llm_count = 0
-    if os.path.exists(TAXONOMY_CACHE_PATH):
-        with open(TAXONOMY_CACHE_PATH) as f:
-            taxonomy_cache = json.load(f)
-
-        for entry in taxonomy_cache.values():
-            if entry.get("taxonomy_source") != "llm_fallback":
-                continue
-            domain      = entry.get("taxonomy_domain",      "") or ""
-            category    = entry.get("taxonomy_category",    "") or ""
-            subcategory = entry.get("taxonomy_subcategory", "") or ""
-
-            if not category or not subcategory:
-                continue
-
-            key = f"{domain}::{category}::{subcategory}"
-            if key in seen_keys:
-                continue
-
-            seen_keys.add(key)
-            text = f"{domain} | {category} | {subcategory}"
-            nodes.append({
-                "key":        key,
-                "domain":     domain,
-                "category":   category,
-                "subcategory": subcategory,
-                "text":       text,
-            })
-            llm_count += 1
-
-        print(f"  {llm_count} unique LLM-invented nodes from taxonomy_cache.json")
-    else:
-        print("  taxonomy_cache.json not found — skipping LLM-invented nodes")
-
-    print(f"Embedding {len(nodes)} taxonomy nodes total ({predefined_count} predefined + {llm_count} LLM-invented)...")
+    print(f"Embedding {len(nodes)} controlled-vocabulary taxonomy nodes...")
     texts   = [n["text"] for n in nodes]
     vectors = model.encode(texts, batch_size=64, show_progress_bar=True, normalize_embeddings=True)
 

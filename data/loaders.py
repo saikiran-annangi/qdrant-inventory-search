@@ -149,12 +149,79 @@ def _aggregate(src, currency, df, *, id_col, mfr_col, model_col, desc_col,
 
 
 # ---------------------------------------------------------------------------
+# Robust source-file reader
+# ---------------------------------------------------------------------------
+# Source files arrive inconsistently: the same logical source may be saved as
+# .xlsx in one drop and .csv in the next, a file may be misnamed (an xlsx saved
+# with a .csv extension), and CSVs come in mixed encodings (utf-8, cp1252,
+# latin-1). Rather than hard-code one format per loader — which silently SKIPs a
+# source the moment the extension changes — every loader reads through this
+# helper. It resolves the file by either extension, detects the REAL format from
+# the file's magic bytes (not the extension), and falls back across encodings.
+
+_XLSX_MAGIC = b"PK\x03\x04"   # xlsx/xlsm are ZIP archives
+_XLS_MAGIC  = b"\xd0\xcf\x11\xe0"  # legacy .xls (OLE2 compound document)
+
+
+def _resolve_source_path(filename: str) -> str:
+    """Return an existing path for `filename`, trying the other extension.
+
+    Tries the name as given, then swaps .xlsx/.xls ↔ .csv. Returns the original
+    candidate (so the caller raises a clear FileNotFoundError) if none exist.
+    """
+    cand = os.path.join(DATA_DIR, filename)
+    if os.path.exists(cand):
+        return cand
+    base, ext = os.path.splitext(filename)
+    alts = [".csv", ".xlsx", ".xls"]
+    if ext.lower() in alts:
+        alts.remove(ext.lower())
+    for alt_ext in alts:
+        alt = os.path.join(DATA_DIR, base + alt_ext)
+        if os.path.exists(alt):
+            return alt
+    return cand
+
+
+def _read_source(filename: str, **csv_kwargs):
+    """Read an inventory source into a DataFrame, format- and encoding-agnostic.
+
+    - Resolves the file by either extension (.xlsx/.xls/.csv).
+    - Sniffs magic bytes so a misnamed file (e.g. an xlsx saved as .csv) is
+      still parsed correctly.
+    - For CSV, tries utf-8 → utf-8-sig → cp1252 → latin-1 (latin-1 decodes any
+      byte, so reading always succeeds).
+
+    `csv_kwargs` are the read_csv options the loader would normally pass
+    (dtype, keep_default_na, low_memory); options unsupported by read_excel are
+    dropped automatically when the file turns out to be a spreadsheet.
+    """
+    path = _resolve_source_path(filename)
+    with open(path, "rb") as fh:
+        head = fh.read(8)
+
+    if head.startswith(_XLSX_MAGIC) or head.startswith(_XLS_MAGIC):
+        # read_excel shares dtype/keep_default_na/header but not low_memory etc.
+        excel_kwargs = {k: v for k, v in csv_kwargs.items()
+                        if k in ("dtype", "keep_default_na", "header", "sheet_name")}
+        return pd.read_excel(path, **excel_kwargs)
+
+    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return pd.read_csv(path, encoding=enc, **csv_kwargs)
+        except UnicodeDecodeError:
+            continue
+    # Should be unreachable (latin-1 never raises), but stay defensive.
+    return pd.read_csv(path, encoding="latin-1", on_bad_lines="skip", **csv_kwargs)
+
+
+# ---------------------------------------------------------------------------
 # Individual source loaders
 # ---------------------------------------------------------------------------
 
 def load_au_parspec():
-    df = pd.read_csv(
-        os.path.join(DATA_DIR, "AU Parspec inventory load 10032026 SEND AB V 1 Test copy for demo.csv"),
+    df = _read_source(
+        "AU Parspec inventory load 10032026 SEND AB V 1 Test copy for demo.csv",
         dtype=str, keep_default_na=False, low_memory=False,
     )
     df.columns = [c.strip() for c in df.columns]
@@ -171,7 +238,7 @@ def load_au_parspec():
 
 
 def load_plumbing():
-    df = pd.read_excel(os.path.join(DATA_DIR, "Plumbing Inventory example.xlsx"), dtype=str)
+    df = _read_source("Plumbing Inventory example.xlsx", dtype=str)
     df.columns = [c.strip() for c in df.columns]
     df = df.iloc[1:].copy()
     df = df[df["Product ERP Code"].astype(str).str.strip() != ""]
@@ -187,8 +254,8 @@ def load_plumbing():
 
 
 def load_standard_supply():
-    df = pd.read_csv(
-        os.path.join(DATA_DIR, "Standard Supply_inventory_data_1.csv"),
+    df = _read_source(
+        "Standard Supply_inventory_data_1.csv",
         dtype=str, keep_default_na=False, low_memory=False,
     )
     df.columns = [c.strip() for c in df.columns]
@@ -207,8 +274,8 @@ def load_standard_supply():
 
 
 def load_guillevin_2():
-    df = pd.read_csv(
-        os.path.join(DATA_DIR, "Guillevin_inventory_data_2.csv"),
+    df = _read_source(
+        "Guillevin_inventory_data_2.csv",
         dtype=str, keep_default_na=False, low_memory=False,
     )
     df.columns = [c.strip() for c in df.columns]
@@ -229,9 +296,7 @@ def load_guillevin_2():
 
 
 def load_guillevin_1():
-    df = pd.read_excel(
-        os.path.join(DATA_DIR, "Guillevin_inventory_data_1.xlsx"), dtype=str,
-    )
+    df = _read_source("Guillevin_inventory_data_1.xlsx", dtype=str)
     df.columns = [c.strip() for c in df.columns]
     df = df[df["Item Id"].astype(str).str.strip() != ""]
     return _aggregate("guillevin_1", "CAD", df,
@@ -242,9 +307,7 @@ def load_guillevin_1():
 
 
 def load_burnaby_dc():
-    df = pd.read_excel(
-        os.path.join(DATA_DIR, "Burnaby DC Lighting Inventory 9 17.xlsx"), dtype=str,
-    )
+    df = _read_source("Burnaby DC Lighting Inventory 9 17.xlsx", dtype=str)
     df.columns = [c.strip() for c in df.columns]
     df = df.reset_index(drop=True)
     df["__id"] = df["Item"].astype(str).str.strip() + "_" + df.index.astype(str)
@@ -283,9 +346,7 @@ def load_burnaby_dc():
 
 
 def load_inventory_sample():
-    df = pd.read_excel(
-        os.path.join(DATA_DIR, "INVENTORY SAMPLE.xlsx"), dtype=str,
-    )
+    df = _read_source("INVENTORY SAMPLE.xlsx", dtype=str)
     df.columns = ["manufacturer_name", "model_number", "description", "extended_description"]
     records = []
     for _, r in df.iterrows():
@@ -329,9 +390,7 @@ _BRIGGS_MFR_MAP = {
 
 
 def load_briggs_plumbing():
-    df = pd.read_excel(
-        os.path.join(DATA_DIR, "Plumbing Inventory_Briggs.xlsx"), dtype=str,
-    )
+    df = _read_source("Plumbing Inventory_Briggs.xlsx", dtype=str)
     df.columns = [c.strip() for c in df.columns]
     df = df[df["Prod"].astype(str).str.strip() != ""]
     records = []
@@ -362,9 +421,7 @@ def load_briggs_plumbing():
 
 
 def load_plumbing_2():
-    df = pd.read_excel(
-        os.path.join(DATA_DIR, "Plumbing_Inventory_2.xlsx"), dtype=str,
-    )
+    df = _read_source("Plumbing_Inventory_2.xlsx", dtype=str)
     df.columns = [c.strip() for c in df.columns]
     df = df[df["Product Code"].astype(str).str.strip() != ""]
     records = []

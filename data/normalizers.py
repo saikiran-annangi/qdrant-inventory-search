@@ -69,7 +69,23 @@ SPEC_PATTERNS = [
     (r"\b(\d+\.?\d*)\s*W\b",    lambda m: f"{m.group(1)}w {m.group(1)}watt"),
     # Milliamps: 30MA -> 30ma 30milliamp
     (r"\b(\d+\.?\d*)\s*MA\b",   lambda m: f"{m.group(1)}ma {m.group(1)}milliamp"),
+    # Wire gauge — MCM / kcmil: "250 MCM" -> "mcm250 kcmil250" so BM25 matches
+    # both the user query ("250 MCM cable") and enriched descriptions that use
+    # either unit name.  Prefix-first format (mcm250 not 250mcm) prevents the
+    # pattern from re-matching its own output in subsequent passes.
+    # Applied symmetrically at ingest and query time.
+    (r"\b(\d+)\s*(?:MCM|KCMIL)\b", lambda m: f"mcm{m.group(1)} kcmil{m.group(1)}"),
+    # AWG solid/stranded: "4/0 AWG" -> "awg40"; "#12 AWG" / "12 AWG" -> "awg12"
+    # (?<!\w) instead of \b so the optional # (non-word char) is also covered.
+    (r"(?<!\w)(\d+)/0\s*AWG\b",     lambda m: f"awg{m.group(1)}0"),
+    (r"(?<!\w)#?(\d+)\s*AWG\b",     lambda m: f"awg{m.group(1)}"),
 ]
+
+# BOM entries (e.g. from a bill of materials CSV) often have a trailing
+# quantity appended as "- N". Strip it before encoding so the noise token
+# doesn't dilute retrieval.  Pattern: optional whitespace, hyphen, digits at
+# end of string.  Only pure integers are stripped; "- 3A" (spec) is left alone.
+_BOM_QTY_RE = re.compile(r"\s*-\s*\d+\s*$")
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +358,58 @@ def attribute_relation(want: set, doc: set) -> tuple:
     return matches, conflicts
 
 
+# ---------------------------------------------------------------------------
+# Model-number prefix stripping
+# ---------------------------------------------------------------------------
+# Buyer queries often include ERP/catalog prefixes before the actual ID:
+#   "p/n 75184"  "cat# 93504"  "sku BRAG2CR19C"  "stk no. 7001008"
+#
+# When model_number_variants() receives the FULL string, the prefix tokens
+# ("cat", "p", "n", "sku") get high BM25 weight and flood the sparse_model
+# results with wrong products (CAT cables, 1P/2P/3P items, etc.), pushing
+# the correct product out of the top-50 candidate pool entirely.
+#
+# This regex strips the prefix before variant expansion so only the bare ID
+# reaches the BM25 index. Applied query-side only; ingest is unaffected.
+
+_MODEL_PREFIX_RE = re.compile(
+    r'^(?:'
+    r'p\s*/\s*n\s*[:#\s]\s*|'   # p/n, p/n:, p/n #
+    r'pn\s*:\s*|'                 # pn:
+    r'cat\s*#\s*|'                # cat#, cat #
+    r'sku\s*[:#\s]\s*|'           # sku, sku:, sku#
+    r'stk\s+no\.?\s*|'            # stk no, stk no.
+    r'part\s*#\s*|'               # part#
+    r'part\s+no\.?\s*|'           # part no, part no.
+    r'item\s*#\s*|'               # item#
+    r'item\s+no\.?\s*|'           # item no, item no.
+    r'ref\s*#\s*|'                # ref#
+    r'model\s*#\s*|'              # model#
+    r'model\s+no\.?\s*'           # model no, model no.
+    r')',
+    re.IGNORECASE,
+)
+
+
+def strip_model_number_prefix(query: str) -> str:
+    """Strip known ERP/catalog prefix tokens before BM25 model-number encoding.
+
+    Examples:
+        'p/n 75184'      -> '75184'
+        'cat# 93504'     -> '93504'
+        'sku BRAG2CR19C' -> 'BRAG2CR19C'
+        'stk no. 7001008'-> '7001008'
+        'MCB 16A 3P'     -> 'MCB 16A 3P'  (no recognized prefix — unchanged)
+    """
+    q = query.strip()
+    m = _MODEL_PREFIX_RE.match(q)
+    if m:
+        bare = q[m.end():].strip()
+        if bare:
+            return bare
+    return q
+
+
 def model_number_variants(model: str) -> str:
     """
     Generate multiple surface forms of a model number for BM25 matching.
@@ -365,6 +433,18 @@ def model_number_variants(model: str) -> str:
     return " ".join(variants)
 
 
+
+
+def clean_bom_query(query: str) -> str:
+    """Strip trailing BOM quantity suffix from a query string.
+
+    BOM entries arrive as 'Dry connectors - 8' or 'P Clamps for 250 - 20'
+    where the trailing '- N' is a quantity, not a search term. Removing it
+    sharpens both BM25 and dense retrieval.
+    """
+    if not query:
+        return ""
+    return _BOM_QTY_RE.sub("", str(query)).strip()
 
 
 def is_sparse_description(desc) -> bool:
